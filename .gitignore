@@ -8,7 +8,6 @@ web-build/
 *.key
 *.mobileprovision
 *.orig.*
-web-build/
 .DS_Store
 *.pem
 npm-debug.*

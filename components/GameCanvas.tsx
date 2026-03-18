@@ -27,6 +27,7 @@ import {
   DOT_GROWTH_AMOUNT,
   GROWTH_THRESHOLD,
   HIT_RADIUS,
+  INITIAL_DOT_RADIUS,
   LINE_SPEED,
   MAX_PATH_POINTS,
   MIN_SPAWN_INTERVAL,
@@ -168,7 +169,7 @@ export default function GameCanvas({ width, height }: Props) {
           // ── Move head ────────────────────────────────────────────────────
           // Organic direction change: random wobble + sine component
           const sineComponent =
-            Math.sin(timestamp * 0.002 + parseFloat(line.id.replace(/\D/g, '0'))) * 0.8;
+            Math.sin(timestamp * 0.002 + parseInt(line.id.replace(/\D/g, ''), 10)) * 0.8;
           line.direction +=
             (Math.random() - 0.5) * DIRECTION_WOBBLE * dt + sineComponent * dt;
 
@@ -208,7 +209,7 @@ export default function GameCanvas({ width, height }: Props) {
           .reduce((sum, l) => sum + pathLength(l.pathPoints), 0);
         dot.connectedPathLength = connectedTotal;
         const growths = Math.floor(connectedTotal / GROWTH_THRESHOLD);
-        const targetRadius = 12 + growths * DOT_GROWTH_AMOUNT;
+        const targetRadius = INITIAL_DOT_RADIUS + growths * DOT_GROWTH_AMOUNT;
         if (targetRadius > dot.radius) {
           dot.radius = targetRadius;
         }
