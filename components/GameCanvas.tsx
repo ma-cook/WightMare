@@ -22,16 +22,17 @@ import {
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import {
+  CELL_SIZE,
   CONNECT_PENALTY_WINDOW,
+  COVERAGE_THRESHOLD,
   DIRECTION_WOBBLE,
   DOT_GROWTH_AMOUNT,
-  GROWTH_THRESHOLD,
+  EXPLORE_RADIUS,
   HIT_RADIUS,
-  INITIAL_DOT_RADIUS,
   LINE_SPEED,
   MAX_PATH_POINTS,
-  MIN_SPAWN_INTERVAL,
   POINT_SAMPLE_DISTANCE,
+  RETURN_FORCE,
   SNAP_RADIUS,
   SPAWN_INTERVAL_DECREASE,
   SPAWN_INTERVAL_MAX,
@@ -46,8 +47,8 @@ import {
 import {
   compressPath,
   distance,
-  pathLength,
   pointsToSvgPath,
+  wigglePoints,
 } from '../engine/squigglyGenerator';
 import { useGameLoop } from '../hooks/useGameLoop';
 import GameOverScreen from './GameOverScreen';
@@ -154,10 +155,7 @@ export default function GameCanvas({ width, height }: Props) {
               );
               if (partner) {
                 partner.penaltyApplied = true;
-                dot.spawnInterval = Math.max(
-                  MIN_SPAWN_INTERVAL,
-                  dot.spawnInterval - SPAWN_INTERVAL_DECREASE,
-                );
+                dot.spawnInterval += SPAWN_INTERVAL_DECREASE;
               }
             }
           }
@@ -167,6 +165,24 @@ export default function GameCanvas({ width, height }: Props) {
           if (line.id === gs.draggingLineId) continue;
 
           // ── Move head ────────────────────────────────────────────────────
+          const prevHead = headOf(line);
+
+          // Steer toward parent dot to keep exploring nearby
+          const dotDx = dot.x - prevHead.x;
+          const dotDy = dot.y - prevHead.y;
+          const distToDot = Math.sqrt(dotDx * dotDx + dotDy * dotDy);
+          if (distToDot > EXPLORE_RADIUS * 0.3) {
+            const angleToCenter = Math.atan2(dotDy, dotDx);
+            let angleDiff = angleToCenter - line.direction;
+            while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+            while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+            const t = Math.min(
+              (distToDot - EXPLORE_RADIUS * 0.3) / (EXPLORE_RADIUS * 0.7),
+              1,
+            );
+            line.direction += angleDiff * RETURN_FORCE * t * dt;
+          }
+
           // Organic direction change: random wobble + sine component
           const sineComponent =
             Math.sin(timestamp * 0.002 + parseInt(line.id.replace(/\D/g, ''), 10)) * 0.8;
@@ -174,15 +190,27 @@ export default function GameCanvas({ width, height }: Props) {
             (Math.random() - 0.5) * DIRECTION_WOBBLE * dt + sineComponent * dt;
 
           const speed = LINE_SPEED * dt;
-          const prevHead = headOf(line);
           const newHead: Point = {
             x: prevHead.x + Math.cos(line.direction) * speed,
             y: prevHead.y + Math.sin(line.direction) * speed,
           };
 
-          // Sample: only add a new point when we've moved POINT_SAMPLE_DISTANCE px
-          if (distance(prevHead, newHead) >= POINT_SAMPLE_DISTANCE) {
-            line.pathPoints.push(newHead);
+          // Always update the live head position (last point in array)
+          line.pathPoints[line.pathPoints.length - 1] = newHead;
+
+          // Commit a new sample point when head moves far enough from
+          // the second-to-last point (the last "committed" position)
+          const lastCommitted = line.pathPoints.length >= 2
+            ? line.pathPoints[line.pathPoints.length - 2]
+            : line.pathPoints[0];
+          if (distance(lastCommitted, newHead) >= POINT_SAMPLE_DISTANCE) {
+            // Push a new live-head slot; the current newHead becomes committed
+            line.pathPoints.push({ ...newHead });
+
+            // Mark coverage cell
+            dot.coveredCells.add(
+              `${Math.floor(newHead.x / CELL_SIZE)},${Math.floor(newHead.y / CELL_SIZE)}`,
+            );
 
             // Compress if too long (keeps first anchor + last head)
             if (line.pathPoints.length > MAX_PATH_POINTS) {
@@ -203,15 +231,28 @@ export default function GameCanvas({ width, height }: Props) {
           }
         }
 
-        // ── Dot growth ───────────────────────────────────────────────────
-        const connectedTotal = dot.lines
-          .filter((l) => l.connectedToId !== null)
-          .reduce((sum, l) => sum + pathLength(l.pathPoints), 0);
-        dot.connectedPathLength = connectedTotal;
-        const growths = Math.floor(connectedTotal / GROWTH_THRESHOLD);
-        const targetRadius = INITIAL_DOT_RADIUS + growths * DOT_GROWTH_AMOUNT;
-        if (targetRadius > dot.radius) {
-          dot.radius = targetRadius;
+        // ── Dot growth (coverage-based: expand when 90% ring covered) ────
+        const innerR = dot.radius;
+        const outerR = dot.radius + DOT_GROWTH_AMOUNT;
+        let totalCells = 0;
+        let coveredCount = 0;
+        const minCX = Math.floor((dot.x - outerR) / CELL_SIZE);
+        const maxCX = Math.floor((dot.x + outerR) / CELL_SIZE);
+        const minCY = Math.floor((dot.y - outerR) / CELL_SIZE);
+        const maxCY = Math.floor((dot.y + outerR) / CELL_SIZE);
+        for (let cx = minCX; cx <= maxCX; cx++) {
+          for (let cy = minCY; cy <= maxCY; cy++) {
+            const px = (cx + 0.5) * CELL_SIZE;
+            const py = (cy + 0.5) * CELL_SIZE;
+            const d = Math.sqrt((px - dot.x) ** 2 + (py - dot.y) ** 2);
+            if (d >= innerR && d < outerR) {
+              totalCells++;
+              if (dot.coveredCells.has(`${cx},${cy}`)) coveredCount++;
+            }
+          }
+        }
+        if (totalCells > 0 && coveredCount / totalCells >= COVERAGE_THRESHOLD) {
+          dot.radius = outerR;
         }
       }
 
@@ -259,6 +300,13 @@ export default function GameCanvas({ width, height }: Props) {
           if (line.pathPoints.length > MAX_PATH_POINTS) {
             line.pathPoints = compressPath(line.pathPoints);
           }
+          // Mark coverage cell
+          const parentDot = gs.dots.find((d) => d.id === line.dotId);
+          if (parentDot) {
+            parentDot.coveredCells.add(
+              `${Math.floor(newPt.x / CELL_SIZE)},${Math.floor(newPt.y / CELL_SIZE)}`,
+            );
+          }
         }
       },
 
@@ -288,6 +336,20 @@ export default function GameCanvas({ width, height }: Props) {
             draggedLine.pathPoints[draggedLine.pathPoints.length - 1] = {
               ...snapHead,
             };
+            // Mark all path cells for coverage
+            const parentDot = gs.dots.find((d) => d.id === draggedLine.dotId);
+            if (parentDot) {
+              for (const pt of draggedLine.pathPoints) {
+                parentDot.coveredCells.add(
+                  `${Math.floor(pt.x / CELL_SIZE)},${Math.floor(pt.y / CELL_SIZE)}`,
+                );
+              }
+              for (const pt of snapTarget.pathPoints) {
+                parentDot.coveredCells.add(
+                  `${Math.floor(pt.x / CELL_SIZE)},${Math.floor(pt.y / CELL_SIZE)}`,
+                );
+              }
+            }
           }
         }
 
@@ -328,7 +390,9 @@ export default function GameCanvas({ width, height }: Props) {
             dot.lines.map((line: SquigglyLine) => {
               const isConnected = line.connectedToId !== null;
               const isDragging = line.id === gs.draggingLineId;
-              const svgPath = pointsToSvgPath(line.pathPoints);
+              const now = Date.now() / 1000;
+              const displayPts = wigglePoints(line.pathPoints, now);
+              const svgPath = pointsToSvgPath(displayPts);
               const head = headOf(line);
 
               return (
@@ -336,7 +400,7 @@ export default function GameCanvas({ width, height }: Props) {
                   <Path
                     d={svgPath}
                     stroke={isConnected ? CONNECTED_COLOR : LINE_COLOR}
-                    strokeWidth={isConnected ? 1.5 : 1.5}
+                    strokeWidth={6}
                     fill="none"
                     strokeLinecap="round"
                     strokeLinejoin="round"

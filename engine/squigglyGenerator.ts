@@ -8,6 +8,31 @@ export function distance(a: Point, b: Point): number {
 }
 
 /**
+ * Return a copy of the points with gentle perpendicular wiggle applied
+ * to interior points (anchors at index 0 and last are left in place).
+ */
+export function wigglePoints(points: Point[], time: number): Point[] {
+  if (points.length <= 2) return points;
+  const AMP = 2.5;   // max displacement in px
+  const FREQ = 3.0;  // spatial frequency along the line
+  const SPEED = 4.0;  // temporal speed
+  return points.map((p, i) => {
+    if (i === 0 || i === points.length - 1) return p;
+    // Compute tangent direction from neighbours
+    const prev = points[i - 1];
+    const next = points[i + 1];
+    const tx = next.x - prev.x;
+    const ty = next.y - prev.y;
+    const len = Math.sqrt(tx * tx + ty * ty) || 1;
+    // Perpendicular (normalised)
+    const nx = -ty / len;
+    const ny = tx / len;
+    const offset = Math.sin(i * FREQ + time * SPEED) * AMP;
+    return { x: p.x + nx * offset, y: p.y + ny * offset };
+  });
+}
+
+/**
  * Convert an array of 2-D points into a smooth SVG path string using
  * quadratic Bézier curves (midpoint-chaining algorithm).
  *

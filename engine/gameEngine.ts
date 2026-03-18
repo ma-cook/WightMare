@@ -33,6 +33,8 @@ export interface DotState {
   lines: SquigglyLine[];
   /** Total length (px) of all connected paths — drives dot growth. */
   connectedPathLength: number;
+  /** Grid cells (keyed "cx,cy") covered by squiggly lines around this dot. */
+  coveredCells: Set<string>;
 }
 
 export interface GameState {
@@ -78,6 +80,15 @@ export const DOT_GROWTH_AMOUNT = 8;
 /** Connected-path length needed (px) before dot grows. */
 export const GROWTH_THRESHOLD = 2500;
 
+/** How far (px) lines explore from their parent dot before steering back. */
+export const EXPLORE_RADIUS = 150;
+/** Strength of the return-to-dot steering force. */
+export const RETURN_FORCE = 3.0;
+/** Grid cell size (px) for tracking area coverage around each dot. */
+export const CELL_SIZE = 6;
+/** Fraction of ring cells that must be covered for the dot to grow. */
+export const COVERAGE_THRESHOLD = 0.9;
+
 // ─── Factory helpers ─────────────────────────────────────────────────────────
 
 let _lineCounter = 0;
@@ -92,7 +103,8 @@ export function createLine(
   return {
     id: `line-${_lineCounter}`,
     dotId,
-    pathPoints: [{ x: dotX, y: dotY }],
+    // Two points: fixed anchor at dot + live head (same position initially)
+    pathPoints: [{ x: dotX, y: dotY }, { x: dotX, y: dotY }],
     direction: Math.random() * Math.PI * 2,
     connectedToId: null,
     spawnTime: now,
@@ -124,6 +136,7 @@ export function createInitialState(width: number, height: number): GameState {
         lastSpawnTime: now,
         lines: [],
         connectedPathLength: 0,
+        coveredCells: new Set<string>(),
       },
       {
         id: 'dot-right',
@@ -134,6 +147,7 @@ export function createInitialState(width: number, height: number): GameState {
         lastSpawnTime: now,
         lines: [],
         connectedPathLength: 0,
+        coveredCells: new Set<string>(),
       },
     ],
   };
