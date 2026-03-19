@@ -27,28 +27,31 @@ import {
   COVERAGE_THRESHOLD,
   DIRECTION_WOBBLE,
   DOT_GROWTH_AMOUNT,
-  EXPLORE_RADIUS,
-  HIT_RADIUS,
+  EXPLORE_RADIUS_MULT,
+  HIT_RADIUS_SQ,
+  INV_CELL_SIZE,
   LINE_SPEED,
   MAX_PATH_POINTS,
-  POINT_SAMPLE_DISTANCE,
+  POINT_SAMPLE_DISTANCE_SQ,
   RETURN_FORCE,
-  SNAP_RADIUS,
+  SNAP_RADIUS_SQ,
   SPAWN_INTERVAL_DECREASE,
   SPAWN_INTERVAL_MAX,
   SPAWN_INTERVAL_MIN,
   createInitialState,
   createLine,
+  packCell,
   type DotState,
   type GameState,
   type Point,
   type SquigglyLine,
 } from '../engine/gameEngine';
 import {
+  bakeWiggle,
   compressPath,
-  distance,
+  distanceSq,
   pointsToSvgPath,
-  wigglePoints,
+  pointsToWiggledSvgPath,
 } from '../engine/squigglyGenerator';
 import { useGameLoop } from '../hooks/useGameLoop';
 import GameOverScreen from './GameOverScreen';
@@ -79,35 +82,37 @@ export default function GameCanvas({ width, height }: Props) {
   // Helpers
   // ─────────────────────────────────────────────────────────────────────────
 
-  const allLines = (): SquigglyLine[] =>
-    stateRef.current.dots.flatMap((d) => d.lines);
-
-  const findLine = (id: string): SquigglyLine | undefined =>
-    allLines().find((l) => l.id === id);
-
-  const findLinesByDot = (dotId: string): SquigglyLine[] =>
-    stateRef.current.dots.find((d) => d.id === dotId)?.lines ?? [];
+  const findLine = (id: string): SquigglyLine | undefined => {
+    for (const dot of stateRef.current.dots) {
+      for (const line of dot.lines) {
+        if (line.id === id) return line;
+      }
+    }
+    return undefined;
+  };
 
   const headOf = (line: SquigglyLine): Point =>
     line.pathPoints[line.pathPoints.length - 1];
 
-  /** Find the nearest unconnected line head within radius. */
+  /** Find the nearest unconnected line head within squared radius. */
   const nearestHead = (
     pt: Point,
-    radius: number,
+    radiusSq: number,
     excludeId?: string,
     sameDotId?: string,
   ): SquigglyLine | undefined => {
     let best: SquigglyLine | undefined;
-    let bestDist = radius;
-    for (const line of allLines()) {
-      if (line.id === excludeId) continue;
-      if (line.connectedToId !== null) continue;
-      if (sameDotId !== undefined && line.dotId !== sameDotId) continue;
-      const d = distance(pt, headOf(line));
-      if (d < bestDist) {
-        bestDist = d;
-        best = line;
+    let bestDistSq = radiusSq;
+    for (const dot of stateRef.current.dots) {
+      for (const line of dot.lines) {
+        if (line.id === excludeId) continue;
+        if (line.connectedToId !== null) continue;
+        if (sameDotId !== undefined && line.dotId !== sameDotId) continue;
+        const dSq = distanceSq(pt, headOf(line));
+        if (dSq < bestDistSq) {
+          bestDistSq = dSq;
+          best = line;
+        }
       }
     }
     return best;
@@ -136,8 +141,16 @@ export default function GameCanvas({ width, height }: Props) {
             SPAWN_INTERVAL_MIN +
             Math.random() * (SPAWN_INTERVAL_MAX - SPAWN_INTERVAL_MIN);
 
-          dot.lines.push(createLine(dot.id, dot.x, dot.y, now));
-          dot.lines.push(createLine(dot.id, dot.x, dot.y, now));
+          // Spawn count scales with total connections: 2 base, +2 at 100, +4 at 200
+          const spawnCount = gs.totalConnected >= 200 ? 6
+            : gs.totalConnected >= 100 ? 4
+            : 2;
+          for (let si = 0; si < spawnCount; si++) {
+            const angle = Math.random() * Math.PI * 2;
+            const sx = dot.x + Math.cos(angle) * dot.radius;
+            const sy = dot.y + Math.sin(angle) * dot.radius;
+            dot.lines.push(createLine(dot.id, sx, sy, now));
+          }
         }
 
         for (const line of dot.lines) {
@@ -168,24 +181,43 @@ export default function GameCanvas({ width, height }: Props) {
           const prevHead = headOf(line);
 
           // Steer toward parent dot to keep exploring nearby
+          const exploreR = dot.radius * EXPLORE_RADIUS_MULT;
+          const exploreInner = exploreR * 0.3;
+          const exploreRange = exploreR * 0.7;
           const dotDx = dot.x - prevHead.x;
           const dotDy = dot.y - prevHead.y;
-          const distToDot = Math.sqrt(dotDx * dotDx + dotDy * dotDy);
-          if (distToDot > EXPLORE_RADIUS * 0.3) {
-            const angleToCenter = Math.atan2(dotDy, dotDx);
-            let angleDiff = angleToCenter - line.direction;
+          const distToDotSq = dotDx * dotDx + dotDy * dotDy;
+          const dotRadiusSq = dot.radius * dot.radius;
+
+          if (distToDotSq < dotRadiusSq) {
+            // Inside the dot — steer sharply away from center
+            const distToDot = Math.sqrt(distToDotSq) || 0.1;
+            const awayAngle = Math.atan2(-dotDy, -dotDx);
+            let angleDiff = awayAngle - line.direction;
             while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
             while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-            const t = Math.min(
-              (distToDot - EXPLORE_RADIUS * 0.3) / (EXPLORE_RADIUS * 0.7),
-              1,
-            );
-            line.direction += angleDiff * RETURN_FORCE * t * dt;
+            // Stronger push the deeper inside
+            const pushStrength = 1 - distToDot / dot.radius;
+            line.direction += angleDiff * (RETURN_FORCE * 3) * pushStrength * dt;
+          } else {
+            const exploreInnerSq = exploreInner * exploreInner;
+            if (distToDotSq > exploreInnerSq) {
+              const distToDot = Math.sqrt(distToDotSq);
+              const angleToCenter = Math.atan2(dotDy, dotDx);
+              let angleDiff = angleToCenter - line.direction;
+              while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+              while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+              const t = Math.min(
+                (distToDot - exploreInner) / exploreRange,
+                1,
+              );
+              line.direction += angleDiff * RETURN_FORCE * t * dt;
+            }
           }
 
           // Organic direction change: random wobble + sine component
           const sineComponent =
-            Math.sin(timestamp * 0.002 + parseInt(line.id.replace(/\D/g, ''), 10)) * 0.8;
+            Math.sin(timestamp * 0.002 + line.numericId) * 0.8;
           line.direction +=
             (Math.random() - 0.5) * DIRECTION_WOBBLE * dt + sineComponent * dt;
 
@@ -203,14 +235,15 @@ export default function GameCanvas({ width, height }: Props) {
           const lastCommitted = line.pathPoints.length >= 2
             ? line.pathPoints[line.pathPoints.length - 2]
             : line.pathPoints[0];
-          if (distance(lastCommitted, newHead) >= POINT_SAMPLE_DISTANCE) {
+          if (distanceSq(lastCommitted, newHead) >= POINT_SAMPLE_DISTANCE_SQ) {
             // Push a new live-head slot; the current newHead becomes committed
             line.pathPoints.push({ ...newHead });
 
             // Mark coverage cell
             dot.coveredCells.add(
-              `${Math.floor(newHead.x / CELL_SIZE)},${Math.floor(newHead.y / CELL_SIZE)}`,
+              packCell((newHead.x * INV_CELL_SIZE) | 0, (newHead.y * INV_CELL_SIZE) | 0),
             );
+            dot.coverageDirty = true;
 
             // Compress if too long (keeps first anchor + last head)
             if (line.pathPoints.length > MAX_PATH_POINTS) {
@@ -232,30 +265,36 @@ export default function GameCanvas({ width, height }: Props) {
         }
 
         // ── Dot growth (coverage-based: expand when 90% ring covered) ────
-        const innerR = dot.radius;
-        const outerR = dot.radius + DOT_GROWTH_AMOUNT;
-        let totalCells = 0;
-        let coveredCount = 0;
-        const minCX = Math.floor((dot.x - outerR) / CELL_SIZE);
-        const maxCX = Math.floor((dot.x + outerR) / CELL_SIZE);
-        const minCY = Math.floor((dot.y - outerR) / CELL_SIZE);
-        const maxCY = Math.floor((dot.y + outerR) / CELL_SIZE);
-        for (let cx = minCX; cx <= maxCX; cx++) {
-          for (let cy = minCY; cy <= maxCY; cy++) {
-            const px = (cx + 0.5) * CELL_SIZE;
-            const py = (cy + 0.5) * CELL_SIZE;
-            const d = Math.sqrt((px - dot.x) ** 2 + (py - dot.y) ** 2);
-            if (d >= innerR && d < outerR) {
-              totalCells++;
-              if (dot.coveredCells.has(`${cx},${cy}`)) coveredCount++;
+        if (dot.coverageDirty) {
+          dot.coverageDirty = false;
+          const innerR = dot.radius;
+          const outerR = dot.radius + DOT_GROWTH_AMOUNT;
+          const innerRSq = innerR * innerR;
+          const outerRSq = outerR * outerR;
+          let totalCells = 0;
+          let coveredCount = 0;
+          const minCX = Math.floor((dot.x - outerR) / CELL_SIZE);
+          const maxCX = Math.floor((dot.x + outerR) / CELL_SIZE);
+          const minCY = Math.floor((dot.y - outerR) / CELL_SIZE);
+          const maxCY = Math.floor((dot.y + outerR) / CELL_SIZE);
+          for (let cx = minCX; cx <= maxCX; cx++) {
+            for (let cy = minCY; cy <= maxCY; cy++) {
+              const px = (cx + 0.5) * CELL_SIZE;
+              const py = (cy + 0.5) * CELL_SIZE;
+              const dSq = (px - dot.x) ** 2 + (py - dot.y) ** 2;
+              if (dSq >= innerRSq && dSq < outerRSq) {
+                totalCells++;
+                if (dot.coveredCells.has(packCell(cx, cy))) coveredCount++;
+              }
             }
           }
-        }
-        if (totalCells > 0 && coveredCount / totalCells >= COVERAGE_THRESHOLD) {
-          dot.radius = outerR;
+          if (totalCells > 0 && coveredCount / totalCells >= COVERAGE_THRESHOLD) {
+            dot.radius = outerR;
+          }
         }
       }
 
+      gs.loopTimeSec = timestamp * 0.001;
       triggerRender();
     },
     [width, height, triggerRender],
@@ -275,7 +314,7 @@ export default function GameCanvas({ width, height }: Props) {
       onPanResponderGrant: (evt: GestureResponderEvent) => {
         const { locationX, locationY } = evt.nativeEvent;
         const pt: Point = { x: locationX, y: locationY };
-        const target = nearestHead(pt, HIT_RADIUS);
+        const target = nearestHead(pt, HIT_RADIUS_SQ);
         if (target) {
           stateRef.current.draggingLineId = target.id;
         }
@@ -295,7 +334,7 @@ export default function GameCanvas({ width, height }: Props) {
         const prev = headOf(line);
 
         // Extend the path organically: add point only when moved enough
-        if (distance(prev, newPt) >= POINT_SAMPLE_DISTANCE) {
+        if (distanceSq(prev, newPt) >= POINT_SAMPLE_DISTANCE_SQ) {
           line.pathPoints.push(newPt);
           if (line.pathPoints.length > MAX_PATH_POINTS) {
             line.pathPoints = compressPath(line.pathPoints);
@@ -304,8 +343,9 @@ export default function GameCanvas({ width, height }: Props) {
           const parentDot = gs.dots.find((d) => d.id === line.dotId);
           if (parentDot) {
             parentDot.coveredCells.add(
-              `${Math.floor(newPt.x / CELL_SIZE)},${Math.floor(newPt.y / CELL_SIZE)}`,
+              packCell((newPt.x * INV_CELL_SIZE) | 0, (newPt.y * INV_CELL_SIZE) | 0),
             );
+            parentDot.coverageDirty = true;
           }
         }
       },
@@ -322,7 +362,7 @@ export default function GameCanvas({ width, height }: Props) {
           };
           const snapTarget = nearestHead(
             relPt,
-            SNAP_RADIUS,
+            SNAP_RADIUS_SQ,
             draggedLine.id,
             draggedLine.dotId,
           );
@@ -331,24 +371,30 @@ export default function GameCanvas({ width, height }: Props) {
             // Connect the two lines
             draggedLine.connectedToId = snapTarget.id;
             snapTarget.connectedToId = draggedLine.id;
+            gs.totalConnected++;
             // Merge heads at snap target's current position
             const snapHead = headOf(snapTarget);
             draggedLine.pathPoints[draggedLine.pathPoints.length - 1] = {
               ...snapHead,
             };
+            // Bake wiggle offsets into path points so bumpy shape is preserved
+            const t = gs.loopTimeSec;
+            bakeWiggle(draggedLine.pathPoints, t);
+            bakeWiggle(snapTarget.pathPoints, t);
             // Mark all path cells for coverage
             const parentDot = gs.dots.find((d) => d.id === draggedLine.dotId);
             if (parentDot) {
               for (const pt of draggedLine.pathPoints) {
                 parentDot.coveredCells.add(
-                  `${Math.floor(pt.x / CELL_SIZE)},${Math.floor(pt.y / CELL_SIZE)}`,
+                  packCell((pt.x * INV_CELL_SIZE) | 0, (pt.y * INV_CELL_SIZE) | 0),
                 );
               }
               for (const pt of snapTarget.pathPoints) {
                 parentDot.coveredCells.add(
-                  `${Math.floor(pt.x / CELL_SIZE)},${Math.floor(pt.y / CELL_SIZE)}`,
+                  packCell((pt.x * INV_CELL_SIZE) | 0, (pt.y * INV_CELL_SIZE) | 0),
                 );
               }
+              parentDot.coverageDirty = true;
             }
           }
         }
@@ -376,6 +422,7 @@ export default function GameCanvas({ width, height }: Props) {
   // ─────────────────────────────────────────────────────────────────────────
 
   const gs = stateRef.current;
+  const renderTime = gs.loopTimeSec;
 
   return (
     <View style={styles.container}>
@@ -386,13 +433,13 @@ export default function GameCanvas({ width, height }: Props) {
       >
         <Svg width={width} height={height} style={styles.svg}>
           {/* Squiggly lines */}
-          {gs.dots.flatMap((dot: DotState) =>
+          {gs.dots.map((dot: DotState) =>
             dot.lines.map((line: SquigglyLine) => {
               const isConnected = line.connectedToId !== null;
               const isDragging = line.id === gs.draggingLineId;
-              const now = Date.now() / 1000;
-              const displayPts = wigglePoints(line.pathPoints, now);
-              const svgPath = pointsToSvgPath(displayPts);
+              const svgPath = isConnected
+                ? pointsToSvgPath(line.pathPoints)
+                : pointsToWiggledSvgPath(line.pathPoints, renderTime);
               const head = headOf(line);
 
               return (
@@ -419,16 +466,53 @@ export default function GameCanvas({ width, height }: Props) {
             }),
           )}
 
-          {/* Dots */}
-          {gs.dots.map((dot: DotState) => (
-            <Circle
-              key={dot.id}
-              cx={dot.x}
-              cy={dot.y}
-              r={dot.radius}
-              fill="#111111"
-            />
-          ))}
+          {/* Dots — animated with smooth escape bumps */}
+          {gs.dots.map((dot: DotState) => {
+            const r = dot.radius;
+            const BUMPS = 8;
+            const BUMP_AMP = r * 0.08;
+            const BUMP_SPEED = 3.0;
+            const segments = Math.max(24, Math.round(r * 2));
+            const step = (Math.PI * 2) / segments;
+
+            // Pre-compute points on the bumpy circle
+            const pts: { x: number; y: number }[] = [];
+            for (let i = 0; i < segments; i++) {
+              const angle = i * step;
+              const bump =
+                Math.sin(angle * BUMPS + renderTime * BUMP_SPEED) * BUMP_AMP * 0.6 +
+                Math.sin(angle * (BUMPS + 3) - renderTime * BUMP_SPEED * 1.3) * BUMP_AMP * 0.4;
+              const br = r + bump;
+              pts.push({
+                x: dot.x + Math.cos(angle) * br,
+                y: dot.y + Math.sin(angle) * br,
+              });
+            }
+
+            // Build smooth closed cubic-bezier path through the points
+            const n = pts.length;
+            let dotPath = `M ${Math.round(pts[0].x)} ${Math.round(pts[0].y)}`;
+            for (let i = 0; i < n; i++) {
+              const p0 = pts[(i - 1 + n) % n];
+              const p1 = pts[i];
+              const p2 = pts[(i + 1) % n];
+              const p3 = pts[(i + 2) % n];
+              // Catmull-Rom → cubic bezier control points (tension 1/6)
+              const cp1x = p1.x + (p2.x - p0.x) / 6;
+              const cp1y = p1.y + (p2.y - p0.y) / 6;
+              const cp2x = p2.x - (p3.x - p1.x) / 6;
+              const cp2y = p2.y - (p3.y - p1.y) / 6;
+              dotPath += ` C ${Math.round(cp1x)} ${Math.round(cp1y)}, ${Math.round(cp2x)} ${Math.round(cp2y)}, ${Math.round(p2.x)} ${Math.round(p2.y)}`;
+            }
+            dotPath += ' Z';
+            return (
+              <Path
+                key={dot.id}
+                d={dotPath}
+                fill="#111111"
+              />
+            );
+          })}
         </Svg>
       </View>
 

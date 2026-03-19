@@ -7,6 +7,7 @@ export interface Point {
 
 export interface SquigglyLine {
   id: string;
+  numericId: number;
   dotId: string;
   /** Full path history, index 0 is anchored at the parent dot. */
   pathPoints: Point[];
@@ -33,8 +34,10 @@ export interface DotState {
   lines: SquigglyLine[];
   /** Total length (px) of all connected paths — drives dot growth. */
   connectedPathLength: number;
-  /** Grid cells (keyed "cx,cy") covered by squiggly lines around this dot. */
-  coveredCells: Set<string>;
+  /** Grid cells (packed numeric keys) covered by squiggly lines around this dot. */
+  coveredCells: Set<number>;
+  /** True when new cells have been added since last coverage check. */
+  coverageDirty: boolean;
 }
 
 export interface GameState {
@@ -45,20 +48,24 @@ export interface GameState {
   dots: DotState[];
   /** Id of the line currently being dragged, or null. */
   draggingLineId: string | null;
+  /** rAF timestamp from the last game-loop tick (seconds). Used by renderer. */
+  loopTimeSec: number;
+  /** Total number of line-pairs successfully connected so far. */
+  totalConnected: number;
 }
 
 // ─── Tunable constants ───────────────────────────────────────────────────────
 
 /** Initial spawn interval minimum (ms). */
-export const SPAWN_INTERVAL_MIN = 5000;
+export const SPAWN_INTERVAL_MIN = 4000;
 /** Initial spawn interval maximum (ms). */
-export const SPAWN_INTERVAL_MAX = 10000;
+export const SPAWN_INTERVAL_MAX = 8000;
 /** Hard floor for spawn interval (ms). */
 export const MIN_SPAWN_INTERVAL = 1000;
 /** How much the spawn interval shrinks after a missed connection (ms). */
 export const SPAWN_INTERVAL_DECREASE = 200;
 /** How long the player has to connect a spawned pair before a penalty (ms). */
-export const CONNECT_PENALTY_WINDOW = 2000;
+export const CONNECT_PENALTY_WINDOW = 1000;
 
 /** Head movement speed in px/s. */
 export const LINE_SPEED = 40;
@@ -80,8 +87,8 @@ export const DOT_GROWTH_AMOUNT = 8;
 /** Connected-path length needed (px) before dot grows. */
 export const GROWTH_THRESHOLD = 2500;
 
-/** How far (px) lines explore from their parent dot before steering back. */
-export const EXPLORE_RADIUS = 150;
+/** Explore radius = this multiplier × dot.radius. */
+export const EXPLORE_RADIUS_MULT = 12;
 /** Strength of the return-to-dot steering force. */
 export const RETURN_FORCE = 3.0;
 /** Grid cell size (px) for tracking area coverage around each dot. */
@@ -89,9 +96,21 @@ export const CELL_SIZE = 6;
 /** Fraction of ring cells that must be covered for the dot to grow. */
 export const COVERAGE_THRESHOLD = 0.9;
 
+// ─── Derived constants (avoid repeated work in hot paths) ────────────────────
+
+export const POINT_SAMPLE_DISTANCE_SQ = POINT_SAMPLE_DISTANCE * POINT_SAMPLE_DISTANCE;
+export const HIT_RADIUS_SQ = HIT_RADIUS * HIT_RADIUS;
+export const SNAP_RADIUS_SQ = SNAP_RADIUS * SNAP_RADIUS;
+export const INV_CELL_SIZE = 1 / CELL_SIZE;
+
+/** Pack cell indices into a single number for Set<number> lookups. */
+export function packCell(cx: number, cy: number): number {
+  return cx * 100000 + cy;
+}
+
 // ─── Factory helpers ─────────────────────────────────────────────────────────
 
-let _lineCounter = 0;
+let _lineCounter = Date.now();
 
 export function createLine(
   dotId: string,
@@ -102,6 +121,7 @@ export function createLine(
   _lineCounter += 1;
   return {
     id: `line-${_lineCounter}`,
+    numericId: _lineCounter,
     dotId,
     // Two points: fixed anchor at dot + live head (same position initially)
     pathPoints: [{ x: dotX, y: dotY }, { x: dotX, y: dotY }],
@@ -126,6 +146,8 @@ export function createInitialState(width: number, height: number): GameState {
     startTime: now,
     survivalTime: 0,
     draggingLineId: null,
+    loopTimeSec: 0,
+    totalConnected: 0,
     dots: [
       {
         id: 'dot-left',
@@ -133,10 +155,11 @@ export function createInitialState(width: number, height: number): GameState {
         y: centerY,
         radius: INITIAL_DOT_RADIUS,
         spawnInterval: makeInterval(),
-        lastSpawnTime: now,
+        lastSpawnTime: 0,
         lines: [],
         connectedPathLength: 0,
-        coveredCells: new Set<string>(),
+        coveredCells: new Set<number>(),
+        coverageDirty: false,
       },
       {
         id: 'dot-right',
@@ -144,10 +167,11 @@ export function createInitialState(width: number, height: number): GameState {
         y: centerY,
         radius: INITIAL_DOT_RADIUS,
         spawnInterval: makeInterval(),
-        lastSpawnTime: now,
+        lastSpawnTime: 0,
         lines: [],
         connectedPathLength: 0,
-        coveredCells: new Set<string>(),
+        coveredCells: new Set<number>(),
+        coverageDirty: false,
       },
     ],
   };
