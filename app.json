@@ -5,6 +5,11 @@
     "version": "1.0.0",
     "orientation": "landscape",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assests/image (5).png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
     "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true
@@ -13,6 +18,10 @@
       "adaptiveIcon": {
         "backgroundColor": "#ffffff"
       }
+    },
+    "androidStatusBar": {
+      "hidden": true,
+      "translucent": true
     },
     "web": {
       "bundler": "metro"

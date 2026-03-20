@@ -24,18 +24,24 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import {
   CELL_SIZE,
   CONNECT_PENALTY_WINDOW,
+  CONNECT_REWARD_WINDOW,
   COVERAGE_THRESHOLD,
   DIRECTION_WOBBLE,
+  DOT_GROW_DURATION,
   DOT_GROWTH_AMOUNT,
+  ESCAPE_TIME,
   EXPLORE_RADIUS_MULT,
   HIT_RADIUS_SQ,
   INV_CELL_SIZE,
+  LARGER_DOT_SPAWN_BOOST,
   LINE_SPEED,
   MAX_PATH_POINTS,
+  MAX_UNCONNECTED_PER_DOT,
   POINT_SAMPLE_DISTANCE_SQ,
   RETURN_FORCE,
   SNAP_RADIUS_SQ,
   SPAWN_INTERVAL_DECREASE,
+  SPAWN_INTERVAL_INCREASE,
   SPAWN_INTERVAL_MAX,
   SPAWN_INTERVAL_MIN,
   createInitialState,
@@ -133,23 +139,72 @@ export default function GameCanvas({ width, height }: Props) {
       gs.survivalTime = (now - gs.startTime) / 1000;
 
       for (const dot of gs.dots) {
+        // ── Animate radius toward targetRadius ─────────────────────────────
+        if (dot.radius < dot.targetRadius) {
+          if (dot.growStartTime === 0) {
+            dot.growStartTime = now;
+            dot.growStartRadius = dot.radius;
+          }
+          const elapsed = now - dot.growStartTime;
+          const t = Math.min(elapsed / DOT_GROW_DURATION, 1);
+          dot.radius = dot.growStartRadius + (dot.targetRadius - dot.growStartRadius) * t;
+          if (t >= 1) {
+            dot.radius = dot.targetRadius;
+            dot.growStartTime = 0;
+          }
+        }
+
+        // ── Determine spawn interval boost for larger dot ──────────────────
+        const otherDot = gs.dots.find((d) => d.id !== dot.id);
+        const isLarger = otherDot ? dot.targetRadius > otherDot.targetRadius : false;
+        const spawnBoost = isLarger ? LARGER_DOT_SPAWN_BOOST : 0;
+
+        // ── Pending spawn batches (staggered second wave / third wave) ────
+        dot.pendingBatches = dot.pendingBatches.filter((batch) => {
+          if (now < batch.spawnAt) return true;
+          const unc = dot.lines.filter((l) => l.connectedToId === null).length;
+          const avail = Math.max(0, MAX_UNCONNECTED_PER_DOT - unc);
+          const n = Math.min(batch.count, avail);
+          for (let si = 0; si < n; si++) {
+            const angle = Math.random() * Math.PI * 2;
+            dot.lines.push(createLine(dot.id,
+              dot.x + Math.cos(angle) * dot.radius,
+              dot.y + Math.sin(angle) * dot.radius, now));
+          }
+          return false;
+        });
+
         // ── Spawn ──────────────────────────────────────────────────────────
-        if (now - dot.lastSpawnTime >= dot.spawnInterval) {
+        const effectiveInterval = Math.max(1000, dot.spawnInterval - spawnBoost);
+        if (now - dot.lastSpawnTime >= effectiveInterval) {
           dot.lastSpawnTime = now;
           // Randomise next interval
           dot.spawnInterval =
             SPAWN_INTERVAL_MIN +
             Math.random() * (SPAWN_INTERVAL_MAX - SPAWN_INTERVAL_MIN);
 
-          // Spawn count scales with total connections: 2 base, +2 at 100, +4 at 200
-          const spawnCount = gs.totalConnected >= 200 ? 6
-            : gs.totalConnected >= 100 ? 4
+          // Spawn count scales with total connections: 2 base, +2 at 75, +4 at 150
+          const spawnCount = gs.totalConnected >= 150 ? 6
+            : gs.totalConnected >= 75 ? 4
             : 2;
-          for (let si = 0; si < spawnCount; si++) {
+          // Cap unconnected lines per dot
+          const unconnected = dot.lines.filter((l) => l.connectedToId === null).length;
+          const allowed = Math.max(0, MAX_UNCONNECTED_PER_DOT - unconnected);
+
+          // Always spawn first 2 immediately
+          const firstBatch = Math.min(2, allowed);
+          for (let si = 0; si < firstBatch; si++) {
             const angle = Math.random() * Math.PI * 2;
-            const sx = dot.x + Math.cos(angle) * dot.radius;
-            const sy = dot.y + Math.sin(angle) * dot.radius;
-            dot.lines.push(createLine(dot.id, sx, sy, now));
+            dot.lines.push(createLine(dot.id,
+              dot.x + Math.cos(angle) * dot.radius,
+              dot.y + Math.sin(angle) * dot.radius, now));
+          }
+          // Queue second wave (+1 s) and third wave (+2 s) for 4 / 6-count modes
+          if (spawnCount >= 4 && allowed > 2) {
+            dot.pendingBatches.push({ count: Math.min(2, allowed - 2), spawnAt: now + 1000 });
+          }
+          if (spawnCount >= 6 && allowed > 4) {
+            dot.pendingBatches.push({ count: Math.min(2, allowed - 4), spawnAt: now + 2000 });
           }
         }
 
@@ -181,37 +236,41 @@ export default function GameCanvas({ width, height }: Props) {
           const prevHead = headOf(line);
 
           // Steer toward parent dot to keep exploring nearby
-          const exploreR = dot.radius * EXPLORE_RADIUS_MULT;
-          const exploreInner = exploreR * 0.3;
-          const exploreRange = exploreR * 0.7;
-          const dotDx = dot.x - prevHead.x;
-          const dotDy = dot.y - prevHead.y;
-          const distToDotSq = dotDx * dotDx + dotDy * dotDy;
-          const dotRadiusSq = dot.radius * dot.radius;
+          // After ESCAPE_TIME, the line breaks free and ignores the explore zone
+          const escaped = now - line.spawnTime > ESCAPE_TIME;
 
-          if (distToDotSq < dotRadiusSq) {
-            // Inside the dot — steer sharply away from center
-            const distToDot = Math.sqrt(distToDotSq) || 0.1;
-            const awayAngle = Math.atan2(-dotDy, -dotDx);
-            let angleDiff = awayAngle - line.direction;
-            while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-            while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-            // Stronger push the deeper inside
-            const pushStrength = 1 - distToDot / dot.radius;
-            line.direction += angleDiff * (RETURN_FORCE * 3) * pushStrength * dt;
-          } else {
-            const exploreInnerSq = exploreInner * exploreInner;
-            if (distToDotSq > exploreInnerSq) {
-              const distToDot = Math.sqrt(distToDotSq);
-              const angleToCenter = Math.atan2(dotDy, dotDx);
-              let angleDiff = angleToCenter - line.direction;
+          if (!escaped) {
+            const exploreR = dot.radius * EXPLORE_RADIUS_MULT;
+            const exploreInner = exploreR * 0.3;
+            const exploreRange = exploreR * 0.7;
+            const dotDx = dot.x - prevHead.x;
+            const dotDy = dot.y - prevHead.y;
+            const distToDotSq = dotDx * dotDx + dotDy * dotDy;
+            const dotRadiusSq = dot.radius * dot.radius;
+
+            if (distToDotSq < dotRadiusSq) {
+              // Inside the dot — steer sharply away from center
+              const distToDot = Math.sqrt(distToDotSq) || 0.1;
+              const awayAngle = Math.atan2(-dotDy, -dotDx);
+              let angleDiff = awayAngle - line.direction;
               while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
               while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-              const t = Math.min(
-                (distToDot - exploreInner) / exploreRange,
-                1,
-              );
-              line.direction += angleDiff * RETURN_FORCE * t * dt;
+              const pushStrength = 1 - distToDot / dot.radius;
+              line.direction += angleDiff * (RETURN_FORCE * 3) * pushStrength * dt;
+            } else {
+              const exploreInnerSq = exploreInner * exploreInner;
+              if (distToDotSq > exploreInnerSq) {
+                const distToDot = Math.sqrt(distToDotSq);
+                const angleToCenter = Math.atan2(dotDy, dotDx);
+                let angleDiff = angleToCenter - line.direction;
+                while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+                while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+                const t = Math.min(
+                  (distToDot - exploreInner) / exploreRange,
+                  1,
+                );
+                line.direction += angleDiff * RETURN_FORCE * t * dt;
+              }
             }
           }
 
@@ -222,13 +281,14 @@ export default function GameCanvas({ width, height }: Props) {
             (Math.random() - 0.5) * DIRECTION_WOBBLE * dt + sineComponent * dt;
 
           const speed = LINE_SPEED * dt;
-          const newHead: Point = {
-            x: prevHead.x + Math.cos(line.direction) * speed,
-            y: prevHead.y + Math.sin(line.direction) * speed,
-          };
+          const newX = prevHead.x + Math.cos(line.direction) * speed;
+          const newY = prevHead.y + Math.sin(line.direction) * speed;
 
-          // Always update the live head position (last point in array)
-          line.pathPoints[line.pathPoints.length - 1] = newHead;
+          // Mutate the live head in place — avoids allocating a new object every frame
+          const liveHead = line.pathPoints[line.pathPoints.length - 1];
+          liveHead.x = newX;
+          liveHead.y = newY;
+          const newHead = liveHead;
 
           // Commit a new sample point when head moves far enough from
           // the second-to-last point (the last "committed" position)
@@ -267,8 +327,8 @@ export default function GameCanvas({ width, height }: Props) {
         // ── Dot growth (coverage-based: expand when 90% ring covered) ────
         if (dot.coverageDirty) {
           dot.coverageDirty = false;
-          const innerR = dot.radius;
-          const outerR = dot.radius + DOT_GROWTH_AMOUNT;
+          const innerR = dot.targetRadius;
+          const outerR = dot.targetRadius + DOT_GROWTH_AMOUNT;
           const innerRSq = innerR * innerR;
           const outerRSq = outerR * outerR;
           let totalCells = 0;
@@ -289,7 +349,7 @@ export default function GameCanvas({ width, height }: Props) {
             }
           }
           if (totalCells > 0 && coveredCount / totalCells >= COVERAGE_THRESHOLD) {
-            dot.radius = outerR;
+            dot.targetRadius = outerR;
           }
         }
       }
@@ -372,6 +432,17 @@ export default function GameCanvas({ width, height }: Props) {
             draggedLine.connectedToId = snapTarget.id;
             snapTarget.connectedToId = draggedLine.id;
             gs.totalConnected++;
+            // Reward: if connected quickly, slow down spawn rate
+            const parentDotForReward = gs.dots.find((d) => d.id === draggedLine.dotId);
+            if (parentDotForReward) {
+              const age = Date.now() - draggedLine.spawnTime;
+              if (age <= CONNECT_REWARD_WINDOW) {
+                parentDotForReward.spawnInterval = Math.min(
+                  parentDotForReward.spawnInterval + SPAWN_INTERVAL_INCREASE,
+                  SPAWN_INTERVAL_MAX,
+                );
+              }
+            }
             // Merge heads at snap target's current position
             const snapHead = headOf(snapTarget);
             draggedLine.pathPoints[draggedLine.pathPoints.length - 1] = {
@@ -381,9 +452,16 @@ export default function GameCanvas({ width, height }: Props) {
             const t = gs.loopTimeSec;
             bakeWiggle(draggedLine.pathPoints, t);
             bakeWiggle(snapTarget.pathPoints, t);
+            // Cache SVG paths — connected lines never change again
+            draggedLine.cachedSvgPath = pointsToSvgPath(draggedLine.pathPoints);
+            snapTarget.cachedSvgPath = pointsToSvgPath(snapTarget.pathPoints);
             // Mark all path cells for coverage
             const parentDot = gs.dots.find((d) => d.id === draggedLine.dotId);
             if (parentDot) {
+              // Append to the dot's combined connected SVG (one <Path> for all)
+              parentDot.cachedConnectedSvg +=
+                ' ' + draggedLine.cachedSvgPath +
+                ' ' + snapTarget.cachedSvgPath;
               for (const pt of draggedLine.pathPoints) {
                 parentDot.coveredCells.add(
                   packCell((pt.x * INV_CELL_SIZE) | 0, (pt.y * INV_CELL_SIZE) | 0),
@@ -432,35 +510,44 @@ export default function GameCanvas({ width, height }: Props) {
         {...panResponder.panHandlers}
       >
         <Svg width={width} height={height} style={styles.svg}>
-          {/* Squiggly lines */}
+          {/* Connected lines — one single <Path> per dot for all connected lines */}
+          {gs.dots.map((dot: DotState) =>
+            dot.cachedConnectedSvg ? (
+              <Path
+                key={`${dot.id}-connected`}
+                d={dot.cachedConnectedSvg}
+                stroke={CONNECTED_COLOR}
+                strokeWidth={6}
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            ) : null,
+          )}
+          {/* Active (unconnected) lines — rendered individually */}
           {gs.dots.map((dot: DotState) =>
             dot.lines.map((line: SquigglyLine) => {
-              const isConnected = line.connectedToId !== null;
+              if (line.connectedToId !== null) return null;
               const isDragging = line.id === gs.draggingLineId;
-              const svgPath = isConnected
-                ? pointsToSvgPath(line.pathPoints)
-                : pointsToWiggledSvgPath(line.pathPoints, renderTime);
+              const svgPath = pointsToWiggledSvgPath(line.pathPoints, renderTime);
               const head = headOf(line);
 
               return (
                 <React.Fragment key={line.id}>
                   <Path
                     d={svgPath}
-                    stroke={isConnected ? CONNECTED_COLOR : LINE_COLOR}
+                    stroke={LINE_COLOR}
                     strokeWidth={6}
                     fill="none"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                   />
-                  {/* Head indicator — only shown for unconnected lines */}
-                  {!isConnected && (
-                    <Circle
-                      cx={head.x}
-                      cy={head.y}
-                      r={isDragging ? 9 : 6}
-                      fill={HEAD_COLOR}
-                    />
-                  )}
+                  <Circle
+                    cx={head.x}
+                    cy={head.y}
+                    r={isDragging ? 9 : 6}
+                    fill={HEAD_COLOR}
+                  />
                 </React.Fragment>
               );
             }),
@@ -472,37 +559,35 @@ export default function GameCanvas({ width, height }: Props) {
             const BUMPS = 8;
             const BUMP_AMP = r * 0.08;
             const BUMP_SPEED = 3.0;
-            const segments = Math.max(24, Math.round(r * 2));
+            const segments = Math.min(36, Math.max(24, Math.round(r * 2)));
             const step = (Math.PI * 2) / segments;
 
-            // Pre-compute points on the bumpy circle
-            const pts: { x: number; y: number }[] = [];
+            // Compute bumpy radii into a flat Float32 pair buffer [x,y,...]
+            // to avoid allocating an object per segment.
+            const buf = new Float64Array(segments * 2);
             for (let i = 0; i < segments; i++) {
               const angle = i * step;
               const bump =
                 Math.sin(angle * BUMPS + renderTime * BUMP_SPEED) * BUMP_AMP * 0.6 +
                 Math.sin(angle * (BUMPS + 3) - renderTime * BUMP_SPEED * 1.3) * BUMP_AMP * 0.4;
               const br = r + bump;
-              pts.push({
-                x: dot.x + Math.cos(angle) * br,
-                y: dot.y + Math.sin(angle) * br,
-              });
+              buf[i * 2] = dot.x + Math.cos(angle) * br;
+              buf[i * 2 + 1] = dot.y + Math.sin(angle) * br;
             }
 
-            // Build smooth closed cubic-bezier path through the points
-            const n = pts.length;
-            let dotPath = `M ${Math.round(pts[0].x)} ${Math.round(pts[0].y)}`;
+            // Build smooth closed cubic-bezier path (Catmull-Rom, tension 1/6)
+            const n = segments;
+            let dotPath = `M ${Math.round(buf[0])} ${Math.round(buf[1])}`;
             for (let i = 0; i < n; i++) {
-              const p0 = pts[(i - 1 + n) % n];
-              const p1 = pts[i];
-              const p2 = pts[(i + 1) % n];
-              const p3 = pts[(i + 2) % n];
-              // Catmull-Rom → cubic bezier control points (tension 1/6)
-              const cp1x = p1.x + (p2.x - p0.x) / 6;
-              const cp1y = p1.y + (p2.y - p0.y) / 6;
-              const cp2x = p2.x - (p3.x - p1.x) / 6;
-              const cp2y = p2.y - (p3.y - p1.y) / 6;
-              dotPath += ` C ${Math.round(cp1x)} ${Math.round(cp1y)}, ${Math.round(cp2x)} ${Math.round(cp2y)}, ${Math.round(p2.x)} ${Math.round(p2.y)}`;
+              const i0 = ((i - 1 + n) % n) * 2;
+              const i1 = i * 2;
+              const i2 = ((i + 1) % n) * 2;
+              const i3 = ((i + 2) % n) * 2;
+              const cp1x = buf[i1] + (buf[i2] - buf[i0]) / 6;
+              const cp1y = buf[i1 + 1] + (buf[i2 + 1] - buf[i0 + 1]) / 6;
+              const cp2x = buf[i2] - (buf[i3] - buf[i1]) / 6;
+              const cp2y = buf[i2 + 1] - (buf[i3 + 1] - buf[i1 + 1]) / 6;
+              dotPath += ` C ${Math.round(cp1x)} ${Math.round(cp1y)}, ${Math.round(cp2x)} ${Math.round(cp2y)}, ${Math.round(buf[i2])} ${Math.round(buf[i2 + 1])}`;
             }
             dotPath += ' Z';
             return (
@@ -510,6 +595,48 @@ export default function GameCanvas({ width, height }: Props) {
                 key={dot.id}
                 d={dotPath}
                 fill="#111111"
+              />
+            );
+          })}
+
+          {/* Writhing flecks inside each dot — count scales with radius, per-fleck random blink */}
+          {gs.dots.map((dot: DotState, dotIdx: number) => {
+            const r = dot.radius;
+            if (r < 18) return null;
+            // More flecks as the dot grows: 1 at r≈18, up to 15 at r≈50+
+            const FLECK_COUNT = Math.min(15, Math.max(1, Math.floor((r - 15) / 2.5)));
+            let fleckPath = '';
+            for (let i = 0; i < FLECK_COUNT; i++) {
+              const phase = i * 1.618 + dotIdx * 2.4;
+              // Per-fleck pseudorandom blink — halved frequencies for slower rhythm
+              const blinkCycle = Math.sin(renderTime * (0.18 + i * 0.055) + phase * 2.1)
+                               * Math.cos(renderTime * (0.32 + i * 0.085) + phase * 1.3);
+              if (blinkCycle < 0) continue;
+              // Rotation and shape speeds halved for slower writhing motion
+              const rot = renderTime * (0.22 + i * 0.03) + phase;
+              const radFrac = 0.15 + 0.55 * ((Math.sin(phase * 1.3) + 1) / 2);
+              const ox = dot.x + Math.cos(rot) * r * radFrac;
+              const oy = dot.y + Math.sin(rot) * r * radFrac;
+              const len = r * (0.12 + 0.14 * Math.abs(Math.sin(renderTime * 0.65 + phase)));
+              const sweep = rot + 0.9 + Math.sin(renderTime * 0.8 + phase) * 0.6;
+              const ctrl = rot + 0.45 + Math.sin(renderTime * 1.0 + phase) * 0.4;
+              const ex = ox + Math.cos(sweep) * len;
+              const ey = oy + Math.sin(sweep) * len;
+              const qx = ox + Math.cos(ctrl) * len * 0.7;
+              const qy = oy + Math.sin(ctrl) * len * 0.7;
+              fleckPath += `M ${Math.round(ox)} ${Math.round(oy)} Q ${Math.round(qx)} ${Math.round(qy)} ${Math.round(ex)} ${Math.round(ey)} `;
+            }
+            if (!fleckPath) return null;
+            // Slower overall opacity pulse
+            const opacity = 0.15 + 0.35 * ((Math.sin(renderTime * 0.4 + dotIdx * 1.5) + 1) / 2);
+            return (
+              <Path
+                key={`${dot.id}-flecks`}
+                d={fleckPath}
+                stroke="#777777"
+                strokeWidth={1}
+                fill="none"
+                opacity={opacity}
               />
             );
           })}

@@ -4,7 +4,9 @@ import { Point } from './gameEngine';
  * Squared Euclidean distance — avoids sqrt for magnitude comparisons.
  */
 export function distanceSq(a: Point, b: Point): number {
-  return (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return dx * dx + dy * dy;
 }
 
 /**

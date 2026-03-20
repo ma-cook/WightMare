@@ -19,6 +19,8 @@ export interface SquigglyLine {
   spawnTime: number;
   /** Set to true once the 2-second penalty window has passed. */
   penaltyApplied: boolean;
+  /** Cached SVG path string — set once on connection, avoids re-generating every frame. */
+  cachedSvgPath: string | null;
 }
 
 export interface DotState {
@@ -38,6 +40,16 @@ export interface DotState {
   coveredCells: Set<number>;
   /** True when new cells have been added since last coverage check. */
   coverageDirty: boolean;
+  /** Combined SVG path string for ALL connected lines — one <Path> instead of N. */
+  cachedConnectedSvg: string;
+  /** The radius the dot is growing toward (may differ from radius during animation). */
+  targetRadius: number;
+  /** Timestamp (ms) when the current growth animation started, or 0 if idle. */
+  growStartTime: number;
+  /** Radius at the moment growth was triggered (for lerp). */
+  growStartRadius: number;
+  /** Deferred spawn batches: lines to create at a future timestamp. */
+  pendingBatches: Array<{ count: number; spawnAt: number }>;
 }
 
 export interface GameState {
@@ -63,9 +75,21 @@ export const SPAWN_INTERVAL_MAX = 8000;
 /** Hard floor for spawn interval (ms). */
 export const MIN_SPAWN_INTERVAL = 1000;
 /** How much the spawn interval shrinks after a missed connection (ms). */
-export const SPAWN_INTERVAL_DECREASE = 200;
-/** How long the player has to connect a spawned pair before a penalty (ms). */
-export const CONNECT_PENALTY_WINDOW = 1000;
+export const SPAWN_INTERVAL_DECREASE = 300;
+/** How long the player has to connect before a speed penalty applies (ms). */
+export const CONNECT_PENALTY_WINDOW = 500;
+/** If connected within this window, spawn interval is slowed down (ms). */
+export const CONNECT_REWARD_WINDOW = 300;
+/** How much the spawn interval grows after a quick connection (ms). */
+export const SPAWN_INTERVAL_INCREASE = 300;
+/** After this many ms, an unconnected line escapes its explore zone (ms). */
+export const ESCAPE_TIME = 4000;
+/** Max unconnected lines per dot. */
+export const MAX_UNCONNECTED_PER_DOT = 8;
+/** Duration of dot growth animation (ms). */
+export const DOT_GROW_DURATION = 3000;
+/** Spawn interval speedup (ms) when this dot is larger than the other. */
+export const LARGER_DOT_SPAWN_BOOST = 500;
 
 /** Head movement speed in px/s. */
 export const LINE_SPEED = 40;
@@ -94,7 +118,7 @@ export const RETURN_FORCE = 3.0;
 /** Grid cell size (px) for tracking area coverage around each dot. */
 export const CELL_SIZE = 6;
 /** Fraction of ring cells that must be covered for the dot to grow. */
-export const COVERAGE_THRESHOLD = 0.9;
+export const COVERAGE_THRESHOLD = 0.8;
 
 // ─── Derived constants (avoid repeated work in hot paths) ────────────────────
 
@@ -129,13 +153,14 @@ export function createLine(
     connectedToId: null,
     spawnTime: now,
     penaltyApplied: false,
+    cachedSvgPath: null,
   };
 }
 
 export function createInitialState(width: number, height: number): GameState {
   const centerY = height / 2;
-  const leftX = width * 0.25;
-  const rightX = width * 0.75;
+  const leftX = width * 0.35;
+  const rightX = width * 0.65;
   const now = Date.now();
 
   const makeInterval = () =>
@@ -160,6 +185,11 @@ export function createInitialState(width: number, height: number): GameState {
         connectedPathLength: 0,
         coveredCells: new Set<number>(),
         coverageDirty: false,
+        cachedConnectedSvg: '',
+        targetRadius: INITIAL_DOT_RADIUS,
+        growStartTime: 0,
+        growStartRadius: INITIAL_DOT_RADIUS,
+        pendingBatches: [],
       },
       {
         id: 'dot-right',
@@ -172,6 +202,11 @@ export function createInitialState(width: number, height: number): GameState {
         connectedPathLength: 0,
         coveredCells: new Set<number>(),
         coverageDirty: false,
+        cachedConnectedSvg: '',
+        targetRadius: INITIAL_DOT_RADIUS,
+        growStartTime: 0,
+        growStartRadius: INITIAL_DOT_RADIUS,
+        pendingBatches: [],
       },
     ],
   };
