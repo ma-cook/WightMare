@@ -69,15 +69,15 @@ export interface GameState {
 // ─── Tunable constants ───────────────────────────────────────────────────────
 
 /** Initial spawn interval minimum (ms). */
-export const SPAWN_INTERVAL_MIN = 4000;
+export const SPAWN_INTERVAL_MIN = 3000;
 /** Initial spawn interval maximum (ms). */
-export const SPAWN_INTERVAL_MAX = 8000;
+export const SPAWN_INTERVAL_MAX = 5000;
 /** Hard floor for spawn interval (ms). */
 export const MIN_SPAWN_INTERVAL = 1000;
 /** How much the spawn interval shrinks after a missed connection (ms). */
-export const SPAWN_INTERVAL_DECREASE = 300;
+export const SPAWN_INTERVAL_DECREASE = 500;
 /** How long the player has to connect before a speed penalty applies (ms). */
-export const CONNECT_PENALTY_WINDOW = 500;
+export const CONNECT_PENALTY_WINDOW = 300;
 /** If connected within this window, spawn interval is slowed down (ms). */
 export const CONNECT_REWARD_WINDOW = 300;
 /** How much the spawn interval grows after a quick connection (ms). */

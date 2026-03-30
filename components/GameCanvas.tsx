@@ -223,7 +223,7 @@ export default function GameCanvas({ width, height }: Props) {
               );
               if (partner) {
                 partner.penaltyApplied = true;
-                dot.spawnInterval += SPAWN_INTERVAL_DECREASE;
+                dot.spawnInterval = Math.max(1000, dot.spawnInterval - SPAWN_INTERVAL_DECREASE);
               }
             }
           }
