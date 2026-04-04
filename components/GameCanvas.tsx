@@ -13,11 +13,9 @@
  */
 import React, { useCallback, useRef, useState } from 'react';
 import {
-  PanResponder,
   StyleSheet,
   View,
-  type GestureResponderEvent,
-  type PanResponderGestureState,
+  type NativeTouchEvent,
 } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
@@ -74,9 +72,11 @@ const EDGE_MARGIN = 4;
 interface Props {
   width: number;
   height: number;
+  playerName: string;
+  onReturnToMenu: () => void;
 }
 
-export default function GameCanvas({ width, height }: Props) {
+export default function GameCanvas({ width, height, playerName, onReturnToMenu }: Props) {
   // ── React state: only used to trigger re-renders ──────────────────────────
   const [renderTick, setRenderTick] = useState(0);
   const triggerRender = useCallback(() => setRenderTick((t) => t + 1), []);
@@ -230,7 +230,11 @@ export default function GameCanvas({ width, height }: Props) {
 
           // ── Skip lines that are connected or being dragged ───────────────
           if (line.connectedToId !== null) continue;
-          if (line.id === gs.draggingLineId) continue;
+          let _beingDragged = false;
+          for (const lid of gs.draggingMap.values()) {
+            if (lid === line.id) { _beingDragged = true; break; }
+          }
+          if (_beingDragged) continue;
 
           // ── Move head ────────────────────────────────────────────────────
           const prevHead = headOf(line);
@@ -366,59 +370,65 @@ export default function GameCanvas({ width, height }: Props) {
   // PanResponder — drag-to-connect mechanic
   // ─────────────────────────────────────────────────────────────────────────
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+  // ─────────────────────────────────────────────────────────────────────────
+  // Touch handlers — multi-touch drag-to-connect mechanic
+  // ─────────────────────────────────────────────────────────────────────────
 
-      onPanResponderGrant: (evt: GestureResponderEvent) => {
-        const { locationX, locationY } = evt.nativeEvent;
-        const pt: Point = { x: locationX, y: locationY };
-        const target = nearestHead(pt, HIT_RADIUS_SQ);
-        if (target) {
-          stateRef.current.draggingLineId = target.id;
-        }
-      },
+  const processTouches = useCallback(
+    (touches: NativeTouchEvent[], phase: 'start' | 'move' | 'end') => {
+      const gs = stateRef.current;
+      for (const touch of touches) {
+        const id = String(touch.identifier);
 
-      onPanResponderMove: (
-        evt: GestureResponderEvent,
-        _gestureState: PanResponderGestureState,
-      ) => {
-        const gs = stateRef.current;
-        if (!gs.draggingLineId) return;
-        const line = findLine(gs.draggingLineId);
-        if (!line) return;
-
-        const { locationX, locationY } = evt.nativeEvent;
-        const newPt: Point = { x: locationX, y: locationY };
-        const prev = headOf(line);
-
-        // Extend the path organically: add point only when moved enough
-        if (distanceSq(prev, newPt) >= POINT_SAMPLE_DISTANCE_SQ) {
-          line.pathPoints.push(newPt);
-          if (line.pathPoints.length > MAX_PATH_POINTS) {
-            line.pathPoints = compressPath(line.pathPoints);
+        if (phase === 'start') {
+          const pt: Point = { x: touch.locationX, y: touch.locationY };
+          const target = nearestHead(pt, HIT_RADIUS_SQ);
+          if (target && !gs.draggingMap.has(id)) {
+            let alreadyGrabbed = false;
+            for (const lineId of gs.draggingMap.values()) {
+              if (lineId === target.id) { alreadyGrabbed = true; break; }
+            }
+            if (!alreadyGrabbed) {
+              gs.draggingMap.set(id, target.id);
+            }
           }
-          // Mark coverage cell
-          const parentDot = gs.dots.find((d) => d.id === line.dotId);
-          if (parentDot) {
-            parentDot.coveredCells.add(
-              packCell((newPt.x * INV_CELL_SIZE) | 0, (newPt.y * INV_CELL_SIZE) | 0),
-            );
-            parentDot.coverageDirty = true;
-          }
+          continue;
         }
-      },
 
-      onPanResponderRelease: (evt: GestureResponderEvent) => {
-        const gs = stateRef.current;
-        if (!gs.draggingLineId) return;
+        if (phase === 'move') {
+          const lineId = gs.draggingMap.get(id);
+          if (!lineId) continue;
+          const line = findLine(lineId);
+          if (!line) continue;
 
-        const draggedLine = findLine(gs.draggingLineId);
+          const newPt: Point = { x: touch.locationX, y: touch.locationY };
+          const prev = headOf(line);
+
+          if (distanceSq(prev, newPt) >= POINT_SAMPLE_DISTANCE_SQ) {
+            line.pathPoints.push(newPt);
+            if (line.pathPoints.length > MAX_PATH_POINTS) {
+              line.pathPoints = compressPath(line.pathPoints);
+            }
+            const parentDot = gs.dots.find((d) => d.id === line.dotId);
+            if (parentDot) {
+              parentDot.coveredCells.add(
+                packCell((newPt.x * INV_CELL_SIZE) | 0, (newPt.y * INV_CELL_SIZE) | 0),
+              );
+              parentDot.coverageDirty = true;
+            }
+          }
+          continue;
+        }
+
+        // phase === 'end'
+        const lineId = gs.draggingMap.get(id);
+        if (!lineId) continue;
+
+        const draggedLine = findLine(lineId);
         if (draggedLine) {
           const relPt: Point = {
-            x: evt.nativeEvent.locationX,
-            y: evt.nativeEvent.locationY,
+            x: touch.locationX,
+            y: touch.locationY,
           };
           const snapTarget = nearestHead(
             relPt,
@@ -428,11 +438,9 @@ export default function GameCanvas({ width, height }: Props) {
           );
 
           if (snapTarget) {
-            // Connect the two lines
             draggedLine.connectedToId = snapTarget.id;
             snapTarget.connectedToId = draggedLine.id;
             gs.totalConnected++;
-            // Reward: if connected quickly, slow down spawn rate
             const parentDotForReward = gs.dots.find((d) => d.id === draggedLine.dotId);
             if (parentDotForReward) {
               const age = Date.now() - draggedLine.spawnTime;
@@ -443,22 +451,17 @@ export default function GameCanvas({ width, height }: Props) {
                 );
               }
             }
-            // Merge heads at snap target's current position
             const snapHead = headOf(snapTarget);
             draggedLine.pathPoints[draggedLine.pathPoints.length - 1] = {
               ...snapHead,
             };
-            // Bake wiggle offsets into path points so bumpy shape is preserved
             const t = gs.loopTimeSec;
             bakeWiggle(draggedLine.pathPoints, t);
             bakeWiggle(snapTarget.pathPoints, t);
-            // Cache SVG paths — connected lines never change again
             draggedLine.cachedSvgPath = pointsToSvgPath(draggedLine.pathPoints);
             snapTarget.cachedSvgPath = pointsToSvgPath(snapTarget.pathPoints);
-            // Mark all path cells for coverage
             const parentDot = gs.dots.find((d) => d.id === draggedLine.dotId);
             if (parentDot) {
-              // Append to the dot's combined connected SVG (one <Path> for all)
               parentDot.cachedConnectedSvg +=
                 ' ' + draggedLine.cachedSvgPath +
                 ' ' + snapTarget.cachedSvgPath;
@@ -477,14 +480,11 @@ export default function GameCanvas({ width, height }: Props) {
           }
         }
 
-        gs.draggingLineId = null;
-      },
-
-      onPanResponderTerminate: () => {
-        stateRef.current.draggingLineId = null;
-      },
-    }),
-  ).current;
+        gs.draggingMap.delete(id);
+      }
+    },
+    [],
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
   // Restart
@@ -507,7 +507,10 @@ export default function GameCanvas({ width, height }: Props) {
       {/* Touch / mouse capture layer */}
       <View
         style={[styles.touchLayer, { width, height }]}
-        {...panResponder.panHandlers}
+        onTouchStart={(e) => processTouches(Array.from(e.nativeEvent.changedTouches || [e.nativeEvent]), 'start')}
+        onTouchMove={(e) => processTouches(Array.from(e.nativeEvent.changedTouches || [e.nativeEvent]), 'move')}
+        onTouchEnd={(e) => processTouches(Array.from(e.nativeEvent.changedTouches || [e.nativeEvent]), 'end')}
+        onTouchCancel={(e) => processTouches(Array.from(e.nativeEvent.changedTouches || [e.nativeEvent]), 'end')}
       >
         <Svg width={width} height={height} style={styles.svg}>
           {/* Connected lines — one single <Path> per dot for all connected lines */}
@@ -528,7 +531,8 @@ export default function GameCanvas({ width, height }: Props) {
           {gs.dots.map((dot: DotState) =>
             dot.lines.map((line: SquigglyLine) => {
               if (line.connectedToId !== null) return null;
-              const isDragging = line.id === gs.draggingLineId;
+              let isDragging = false;
+              for (const lid of gs.draggingMap.values()) { if (lid === line.id) { isDragging = true; break; } }
               const svgPath = pointsToWiggledSvgPath(line.pathPoints, renderTime);
               const head = headOf(line);
 
@@ -547,6 +551,12 @@ export default function GameCanvas({ width, height }: Props) {
                     cy={head.y}
                     r={isDragging ? 9 : 6}
                     fill={HEAD_COLOR}
+                  />
+                  <Circle
+                    cx={head.x}
+                    cy={head.y}
+                    r={isDragging ? 4 : 2.5}
+                    fill={dot.id === 'dot-left' ? '#ffffff' : '#bbbbbb'}
                   />
                 </React.Fragment>
               );
@@ -652,7 +662,9 @@ export default function GameCanvas({ width, height }: Props) {
       {gs.status === 'gameOver' && (
         <GameOverScreen
           survivalTime={gs.survivalTime}
+          playerName={playerName}
           onPlayAgain={handlePlayAgain}
+          onReturnToMenu={onReturnToMenu}
         />
       )}
     </View>

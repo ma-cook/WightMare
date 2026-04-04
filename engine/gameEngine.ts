@@ -58,8 +58,8 @@ export interface GameState {
   /** Survival time in seconds (updated every frame). */
   survivalTime: number;
   dots: DotState[];
-  /** Id of the line currently being dragged, or null. */
-  draggingLineId: string | null;
+  /** Map of touch identifier → line id for simultaneous drags. */
+  draggingMap: Map<string, string>;
   /** rAF timestamp from the last game-loop tick (seconds). Used by renderer. */
   loopTimeSec: number;
   /** Total number of line-pairs successfully connected so far. */
@@ -170,7 +170,7 @@ export function createInitialState(width: number, height: number): GameState {
     status: 'playing',
     startTime: now,
     survivalTime: 0,
-    draggingLineId: null,
+    draggingMap: new Map(),
     loopTimeSec: 0,
     totalConnected: 0,
     dots: [

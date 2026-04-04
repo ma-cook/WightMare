@@ -8,19 +8,29 @@ import {
   StatusBar as RNStatusBar,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as NavigationBar from 'expo-navigation-bar';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import GameCanvas from './components/GameCanvas';
+import Leaderboard from './components/Leaderboard';
+import { fetchTopScores, type LeaderboardEntry } from './services/leaderboard';
+import Svg, { Path } from 'react-native-svg';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const splashImage = require('./assests/image (5).png');
 
+const STORAGE_KEY = 'wightmare_gamertag';
+
 export default function App() {
   const [ready, setReady] = useState(Platform.OS === 'web');
-  const [screen, setScreen] = useState<'menu' | 'game'>('menu');
+  const [screen, setScreen] = useState<'menu' | 'nameEntry' | 'game'>('menu');
+  const [playerName, setPlayerName] = useState('');
+  const [nameInput, setNameInput] = useState('');
+  const [topScores, setTopScores] = useState<LeaderboardEntry[]>([]);
   const [dimensions, setDimensions] = useState(() => {
     const { width, height } = Dimensions.get('window');
     return {
@@ -28,6 +38,23 @@ export default function App() {
       height: Math.min(width, height),
     };
   });
+
+  // Load cached gamertag
+  useEffect(() => {
+    AsyncStorage.getItem(STORAGE_KEY).then((val) => {
+      if (val) {
+        setPlayerName(val);
+        setNameInput(val);
+      }
+    });
+  }, []);
+
+  // Fetch leaderboard on mount and when returning to menu
+  useEffect(() => {
+    if (screen === 'menu') {
+      fetchTopScores(10).then(setTopScores).catch(() => {});
+    }
+  }, [screen]);
 
   // Lock to landscape on native
   useEffect(() => {
@@ -71,7 +98,19 @@ export default function App() {
     return () => sub.remove();
   }, []);
 
-  const handlePlay = useCallback(() => setScreen('game'), []);
+  const handlePlay = useCallback(() => setScreen('nameEntry'), []);
+
+  const handleStartGame = useCallback(() => {
+    const trimmed = nameInput.trim().slice(0, 20);
+    if (!trimmed) return;
+    setPlayerName(trimmed);
+    AsyncStorage.setItem(STORAGE_KEY, trimmed);
+    setScreen('game');
+  }, [nameInput]);
+
+  const handleGameOver = useCallback(() => {
+    setScreen('menu');
+  }, []);
 
   if (!ready)
     return (
@@ -85,7 +124,7 @@ export default function App() {
       </View>
     );
 
-  if (screen === 'menu')
+  if (screen === 'menu' || screen === 'nameEntry')
     return (
       <View style={styles.menu}>
         <StatusBar hidden />
@@ -94,16 +133,46 @@ export default function App() {
           style={styles.menuImage}
           resizeMode="contain"
         />
-        <Pressable style={styles.playButton} onPress={handlePlay}>
-          <Text style={styles.playText}>Play</Text>
-        </Pressable>
+        {screen === 'menu' ? (
+          <Pressable style={styles.playButton} onPress={handlePlay}>
+            <Text style={styles.playText}>Play</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.nameRow}>
+            <TextInput
+              style={styles.nameInput}
+              value={nameInput}
+              onChangeText={setNameInput}
+              placeholder="Enter gamertag"
+              placeholderTextColor="#999"
+              maxLength={20}
+              autoFocus
+              onSubmitEditing={handleStartGame}
+            />
+            <Pressable style={styles.arrowButton} onPress={handleStartGame}>
+              <Svg width={24} height={24} viewBox="0 0 24 24">
+                <Path d="M10 6l6 6-6 6" stroke="#fff" strokeWidth={3} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              </Svg>
+            </Pressable>
+          </View>
+        )}
+        {topScores.length > 0 && (
+          <View style={styles.leaderboardWrap}>
+            <Leaderboard entries={topScores} />
+          </View>
+        )}
       </View>
     );
 
   return (
     <View style={styles.container}>
       <StatusBar hidden />
-      <GameCanvas width={dimensions.width} height={dimensions.height} />
+      <GameCanvas
+        width={dimensions.width}
+        height={dimensions.height}
+        playerName={playerName}
+        onReturnToMenu={handleGameOver}
+      />
     </View>
   );
 }
@@ -144,5 +213,32 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 24,
     fontWeight: '700',
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  nameInput: {
+    backgroundColor: '#111111',
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '700',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 8,
+    width: 240,
+  },
+  arrowButton: {
+    backgroundColor: '#111111',
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  leaderboardWrap: {
+    marginTop: 24,
+    width: '100%',
   },
 });
