@@ -5,6 +5,8 @@
   "scripts": {
     "start": "expo start",
     "web": "expo start --web",
+    "build:web": "npx expo export --platform web",
+    "deploy": "npm run build:web && firebase deploy --only hosting",
     "android": "expo start --android",
     "ios": "expo start --ios"
   },
