@@ -1,5 +1,6 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import type { LeaderboardEntry } from '../services/leaderboard';
 
 function formatTime(seconds: number): string {
@@ -8,29 +9,53 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+/** Mobile / phone icon */
+function MobileIcon() {
+  return (
+    <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm5 18h.01"
+        stroke="#FF0000"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+/** Desktop / monitor icon */
+function DesktopIcon() {
+  return (
+    <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M2 4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4zm6 18h8m-4-4v4"
+        stroke="#FF0000"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 interface Props {
   entries: LeaderboardEntry[];
 }
 
 export default function Leaderboard({ entries }: Props) {
-  const left = entries.slice(0, 5);
-  const right = entries.slice(5, 10);
+  const isWeb = Platform.OS === 'web';
 
   return (
     <View style={styles.container} pointerEvents="none">
-      {/* Top 1-5 on the left */}
+      <View style={styles.titleRow}>
+        {isWeb ? <DesktopIcon /> : <MobileIcon />}
+        <Text style={styles.title}>Leaderboard</Text>
+      </View>
       <View style={styles.column}>
-        {left.map((e, i) => (
+        {entries.slice(0, 10).map((e, i) => (
           <Text key={i} style={styles.entry}>
             {i + 1}. {e.name}  {formatTime(e.time)}
-          </Text>
-        ))}
-      </View>
-      {/* Top 6-10 on the right */}
-      <View style={styles.column}>
-        {right.map((e, i) => (
-          <Text key={i} style={styles.entry}>
-            {i + 6}. {e.name}  {formatTime(e.time)}
           </Text>
         ))}
       </View>
@@ -40,10 +65,21 @@ export default function Leaderboard({ entries }: Props) {
 
 const styles = StyleSheet.create({
   container: {
+    alignItems: 'flex-start',
+  },
+  titleRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-    paddingHorizontal: 24,
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  title: {
+    fontFamily: 'serif',
+    fontStyle: 'italic',
+    fontWeight: '900',
+    fontSize: 16,
+    color: '#FF0000',
+    letterSpacing: 1,
   },
   column: {
     alignItems: 'flex-start',

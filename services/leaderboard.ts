@@ -6,6 +6,7 @@ import {
   orderBy,
   query,
 } from 'firebase/firestore';
+import { Platform } from 'react-native';
 import { db } from './firebase';
 
 export interface LeaderboardEntry {
@@ -14,7 +15,8 @@ export interface LeaderboardEntry {
   createdAt: number; // Date.now()
 }
 
-const COLLECTION = 'leaderboard';
+/** Separate Firestore collections so mobile and web have independent leaderboards. */
+const COLLECTION = Platform.OS === 'web' ? 'leaderboard_web' : 'leaderboard';
 
 /** Fetch top N entries sorted by longest survival time. */
 export async function fetchTopScores(n = 10): Promise<LeaderboardEntry[]> {

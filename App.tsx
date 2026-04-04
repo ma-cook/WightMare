@@ -238,7 +238,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   leaderboardWrap: {
-    marginTop: 24,
-    width: '100%',
+    position: 'absolute',
+    left: 24,
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
   },
 });
