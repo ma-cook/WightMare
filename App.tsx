@@ -15,7 +15,7 @@ import * as NavigationBar from 'expo-navigation-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import GameCanvas from './components/GameCanvas';
 import Leaderboard from './components/Leaderboard';
-import SquigglyTitle, { SquigglyText } from './components/SquigglyTitle';
+import SquigglyTitle, { SquigglyText, AnimatedDotWrapper } from './components/SquigglyTitle';
 import { fetchTopScores, type LeaderboardEntry } from './services/leaderboard';
 import Svg, { Path } from 'react-native-svg';
 
@@ -120,9 +120,13 @@ export default function App() {
     return (
       <View style={styles.menu}>
         <StatusBar hidden />
-        <SquigglyTitle maxWidth={400} />
+        <View style={styles.titleWrap}>
+          <SquigglyTitle maxWidth={400} />
+        </View>
         {screen === 'menu' ? (
-          <SquigglyText text="Play" maxWidth={160} letterHeight={48} delay={2200} onPress={handlePlay} />
+          <AnimatedDotWrapper width={140} height={56} onPress={handlePlay}>
+            <SquigglyText text="Play" maxWidth={120} letterHeight={36} delay={0} animDuration={500} color="#ffffff" />
+          </AnimatedDotWrapper>
         ) : (
           <View style={styles.nameRow}>
             <TextInput
@@ -143,7 +147,7 @@ export default function App() {
           </View>
         )}
         {topScores.length > 0 && (
-          <View style={styles.leaderboardWrap}>
+          <View style={styles.leaderboardMenuWrap}>
             <Leaderboard entries={topScores} />
           </View>
         )}
@@ -181,6 +185,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  titleWrap: {
+    marginBottom: 56,
+    marginTop: -40,
+  },
   nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -204,11 +212,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  leaderboardWrap: {
+  leaderboardMenuWrap: {
     position: 'absolute',
-    left: 24,
+    left: 0,
     top: 0,
     bottom: 0,
+    width: '25%',
     justifyContent: 'center',
+    alignItems: 'center',
   },
 });

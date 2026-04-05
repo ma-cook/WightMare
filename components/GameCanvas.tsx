@@ -284,6 +284,16 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
           line.direction +=
             (Math.random() - 0.5) * DIRECTION_WOBBLE * dt + sineComponent * dt;
 
+          // Escaped lines get stronger wandering so they don't beeline to the edge
+          if (escaped) {
+            // Extra wobble — roughly doubles the random turning
+            line.direction += (Math.random() - 0.5) * DIRECTION_WOBBLE * 1.5 * dt;
+            // Periodic sharp turns driven by per-line phase
+            const turnPhase = timestamp * 0.001 + line.numericId * 2.71;
+            line.direction += Math.sin(turnPhase * 1.3) * 2.0 * dt
+                            + Math.cos(turnPhase * 0.7) * 1.5 * dt;
+          }
+
           const speed = LINE_SPEED * dt;
           const newX = prevHead.x + Math.cos(line.direction) * speed;
           const newY = prevHead.y + Math.sin(line.direction) * speed;

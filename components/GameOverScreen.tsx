@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import Leaderboard from './Leaderboard';
+import { SquigglyText } from './SquigglyTitle';
 import { fetchTopScores, submitScore, type LeaderboardEntry } from '../services/leaderboard';
 
 interface Props {
@@ -34,7 +35,7 @@ export default function GameOverScreen({ survivalTime, playerName, onPlayAgain, 
   return (
     <View style={styles.overlay}>
       <View style={styles.card}>
-        <Text style={styles.title}>GAME OVER</Text>
+        <SquigglyText text="Game Over" maxWidth={360} letterHeight={50} animDuration={0} strokeWidth={4} color="#8B0000" />
         <Text style={styles.subtitle}>You survived</Text>
         <Text style={styles.time}>{formatTime(survivalTime)}</Text>
         <View style={styles.buttonRow}>
@@ -63,21 +64,13 @@ export default function GameOverScreen({ survivalTime, playerName, onPlayAgain, 
 const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   card: {
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  title: {
-    fontSize: 40,
-    fontWeight: '900',
-    color: '#8B0000',
-    letterSpacing: 6,
-    marginBottom: 8,
-    fontFamily: 'serif',
-    fontStyle: 'italic',
   },
   subtitle: {
     fontSize: 16,
@@ -123,7 +116,12 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   leaderboardWrap: {
-    marginTop: 20,
-    width: '100%',
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: '30%',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

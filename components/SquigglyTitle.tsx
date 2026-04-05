@@ -60,6 +60,22 @@ const LETTER_PATHS: Record<string, Segment[]> = {
   y: [
     [6, 5, 20, 28], [34, 5, 20, 28], [20, 28, 20, 45],
   ],
+  G: [
+    [34, 12, 24, 5], [24, 5, 14, 5], [14, 5, 6, 12], [6, 12, 6, 38],
+    [6, 38, 14, 45], [14, 45, 24, 45], [24, 45, 34, 38], [34, 38, 34, 26],
+    [34, 26, 22, 26],
+  ],
+  m: [
+    [6, 45, 6, 16], [6, 16, 12, 12], [12, 12, 20, 16], [20, 16, 20, 45],
+    [20, 16, 28, 12], [28, 12, 34, 16], [34, 16, 34, 45],
+  ],
+  O: [
+    [14, 5, 6, 12], [6, 12, 6, 38], [6, 38, 14, 45], [14, 45, 26, 45],
+    [26, 45, 34, 38], [34, 38, 34, 12], [34, 12, 26, 5], [26, 5, 14, 5],
+  ],
+  v: [
+    [6, 5, 20, 45], [34, 5, 20, 45],
+  ],
 };
 
 // ─── Spur data: decorative broken squiggly lines poking out of each letter ──
@@ -147,7 +163,7 @@ function spurPath(
 // ─── Single letter component ────────────────────────────────────────────────
 
 const ANIM_DURATION = 2000; // ms per letter
-const LETTER_STAGGER = 150; // ms delay between letters
+const LETTER_STAGGER = 0; // ms delay between letters (0 = all at once)
 
 interface LetterProps {
   letter: string;
@@ -155,9 +171,12 @@ interface LetterProps {
   letterWidth: number;
   letterHeight: number;
   baseDelay?: number;
+  animDuration?: number;
+  color?: string;
+  strokeWidth?: number;
 }
 
-function AnimatedLetter({ letter, index, letterWidth, letterHeight, baseDelay = 0 }: LetterProps) {
+function AnimatedLetter({ letter, index, letterWidth, letterHeight, baseDelay = 0, animDuration = ANIM_DURATION, color = '#111111', strokeWidth: sw = 2.5 }: LetterProps) {
   const [progress, setProgress] = useState(0);
   const [time, setTime] = useState(0);
   const startRef = useRef(0);
@@ -165,12 +184,22 @@ function AnimatedLetter({ letter, index, letterWidth, letterHeight, baseDelay = 
   const spursRef = useRef(generateSpurs(letter));
 
   useEffect(() => {
+    if (animDuration <= 0) {
+      setProgress(1);
+      setTime(performance.now() * 0.001);
+      const postAnimate = (now2: number) => {
+        setTime(now2 * 0.001);
+        rafRef.current = requestAnimationFrame(postAnimate);
+      };
+      rafRef.current = requestAnimationFrame(postAnimate);
+      return () => cancelAnimationFrame(rafRef.current);
+    }
     const delay = baseDelay + index * LETTER_STAGGER;
     const timeout = setTimeout(() => {
       startRef.current = performance.now();
       const animate = (now: number) => {
         const elapsed = now - startRef.current;
-        const p = Math.min(elapsed / ANIM_DURATION, 1);
+        const p = Math.min(elapsed / animDuration, 1);
         // Ease-out cubic for organic feel
         const eased = 1 - Math.pow(1 - p, 3);
         setProgress(eased);
@@ -260,13 +289,13 @@ function AnimatedLetter({ letter, index, letterWidth, letterHeight, baseDelay = 
   return (
     <Svg width={letterWidth} height={letterHeight} viewBox={viewBox}>
       {dotRadius > 0.5 && (
-        <Circle cx={cx} cy={cy} r={dotRadius} fill="#111111" />
+        <Circle cx={cx} cy={cy} r={dotRadius} fill={color} />
       )}
       {allPaths.trim() && (
         <Path
           d={allPaths}
-          stroke="#111111"
-          strokeWidth={2.5}
+          stroke={color}
+          strokeWidth={sw}
           fill="none"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -285,28 +314,41 @@ interface SquigglyTextProps {
   letterHeight?: number;
   /** Delay before the animation starts (ms) */
   delay?: number;
+  /** Total animation duration per letter in ms (0 = instant) */
+  animDuration?: number;
+  /** Stroke / dot color */
+  color?: string;
+  /** SVG stroke width (default 2.5) */
+  strokeWidth?: number;
   onPress?: () => void;
 }
 
-export function SquigglyText({ text, maxWidth = 500, letterHeight: heightProp = 64, delay = 0, onPress }: SquigglyTextProps) {
+export function SquigglyText({ text, maxWidth = 500, letterHeight: heightProp = 64, delay = 0, animDuration, color, strokeWidth, onPress }: SquigglyTextProps) {
   const letters = text.split('');
-  const widths = letters.map((l) => (l === l.toUpperCase() ? 48 : 34));
+  const widths = letters.map((l) => (l === ' ' ? 20 : l === l.toUpperCase() ? 48 : 34));
   const totalW = widths.reduce((a, b) => a + b, 0);
   const scale = Math.min(1, maxWidth / totalW);
   const letterHeight = heightProp * scale;
 
   const content = (
     <View style={styles.container}>
-      {letters.map((letter, i) => (
-        <AnimatedLetter
-          key={i}
-          letter={letter}
-          index={i}
-          letterWidth={widths[i] * scale}
-          letterHeight={letterHeight}
-          baseDelay={delay}
-        />
-      ))}
+      {letters.map((letter, i) =>
+        letter === ' ' ? (
+          <View key={i} style={{ width: widths[i] * scale }} />
+        ) : (
+          <AnimatedLetter
+            key={i}
+            letter={letter}
+            index={i}
+            letterWidth={widths[i] * scale}
+            letterHeight={letterHeight}
+            baseDelay={delay}
+            {...(animDuration !== undefined ? { animDuration } : {})}
+            {...(color ? { color } : {})}
+            {...(strokeWidth !== undefined ? { strokeWidth } : {})}
+          />
+        ),
+      )}
     </View>
   );
 
@@ -324,11 +366,92 @@ export default function SquigglyTitle({ maxWidth = 500 }: TitleProps) {
   return <SquigglyText text="WightMare" maxWidth={maxWidth} />;
 }
 
+// ─── Animated dot that surrounds content (used for Play button) ─────────────
+
+const DOT_BUMPS = 8;
+const DOT_BUMP_AMP_FRAC = 0.08;
+const DOT_BUMP_SPEED = 3.0;
+const DOT_SEGMENTS = 32;
+
+interface AnimatedDotWrapperProps {
+  /** Horizontal radius of the oval */
+  width: number;
+  /** Vertical radius of the oval */
+  height: number;
+  children: React.ReactNode;
+  onPress?: () => void;
+}
+
+export function AnimatedDotWrapper({ width: ovalW, height: ovalH, children, onPress }: AnimatedDotWrapperProps) {
+  const [time, setTime] = useState(0);
+  const rafRef = useRef(0);
+
+  useEffect(() => {
+    const animate = (now: number) => {
+      setTime(now * 0.001);
+      rafRef.current = requestAnimationFrame(animate);
+    };
+    rafRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, []);
+
+  const padX = 4;
+  const padY = 4;
+  const viewW = ovalW + padX * 2;
+  const viewH = ovalH + padY * 2;
+  const cx = viewW / 2;
+  const cy = viewH / 2;
+  const rx = ovalW / 2;
+  const ry = ovalH / 2;
+  const step = (Math.PI * 2) / DOT_SEGMENTS;
+  const bumpAmp = Math.min(rx, ry) * DOT_BUMP_AMP_FRAC;
+
+  const parts = new Array<string>(DOT_SEGMENTS + 2);
+  const buf = new Float64Array(DOT_SEGMENTS * 2);
+
+  for (let i = 0; i < DOT_SEGMENTS; i++) {
+    const angle = i * step;
+    const bump =
+      Math.sin(angle * DOT_BUMPS + time * DOT_BUMP_SPEED) * bumpAmp * 0.6 +
+      Math.sin(angle * (DOT_BUMPS + 3) - time * DOT_BUMP_SPEED * 1.3) * bumpAmp * 0.4;
+    buf[i * 2] = cx + Math.cos(angle) * (rx + bump);
+    buf[i * 2 + 1] = cy + Math.sin(angle) * (ry + bump);
+  }
+
+  const n = DOT_SEGMENTS;
+  parts[0] = `M ${Math.round(buf[0])} ${Math.round(buf[1])}`;
+  for (let i = 0; i < n; i++) {
+    const i0 = ((i - 1 + n) % n) * 2;
+    const i1 = i * 2;
+    const i2 = ((i + 1) % n) * 2;
+    const i3 = ((i + 2) % n) * 2;
+    const cp1x = buf[i1] + (buf[i2] - buf[i0]) / 6;
+    const cp1y = buf[i1 + 1] + (buf[i2 + 1] - buf[i0 + 1]) / 6;
+    const cp2x = buf[i2] - (buf[i3] - buf[i1]) / 6;
+    const cp2y = buf[i2 + 1] - (buf[i3 + 1] - buf[i1 + 1]) / 6;
+    parts[i + 1] = `C ${Math.round(cp1x)} ${Math.round(cp1y)}, ${Math.round(cp2x)} ${Math.round(cp2y)}, ${Math.round(buf[i2])} ${Math.round(buf[i2 + 1])}`;
+  }
+  parts[n + 1] = 'Z';
+
+  const inner = (
+    <View style={{ width: viewW, height: viewH, alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={viewW} height={viewH} style={StyleSheet.absoluteFill}>
+        <Path d={parts.join(' ')} fill="#111111" />
+      </Svg>
+      {children}
+    </View>
+  );
+
+  if (onPress) {
+    return <Pressable onPress={onPress}>{inner}</Pressable>;
+  }
+  return inner;
+}
+
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 32,
   },
 });
