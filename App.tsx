@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   AppState,
   Dimensions,
-  Image,
   Platform,
   Pressable,
   StatusBar as RNStatusBar,
@@ -17,11 +16,9 @@ import * as NavigationBar from 'expo-navigation-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import GameCanvas from './components/GameCanvas';
 import Leaderboard from './components/Leaderboard';
+import SquigglyTitle from './components/SquigglyTitle';
 import { fetchTopScores, type LeaderboardEntry } from './services/leaderboard';
 import Svg, { Path } from 'react-native-svg';
-
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const splashImage = require('./assests/image (5).png');
 
 const STORAGE_KEY = 'wightmare_gamertag';
 
@@ -116,11 +113,7 @@ export default function App() {
     return (
       <View style={styles.splash}>
         <StatusBar hidden />
-        <Image
-          source={splashImage}
-          style={styles.splashImage}
-          resizeMode="contain"
-        />
+        <SquigglyTitle maxWidth={400} />
       </View>
     );
 
@@ -128,11 +121,7 @@ export default function App() {
     return (
       <View style={styles.menu}>
         <StatusBar hidden />
-        <Image
-          source={splashImage}
-          style={styles.menuImage}
-          resizeMode="contain"
-        />
+        <SquigglyTitle maxWidth={400} />
         {screen === 'menu' ? (
           <Pressable style={styles.playButton} onPress={handlePlay}>
             <Text style={styles.playText}>Play</Text>
@@ -188,21 +177,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  splashImage: {
-    width: '50%',
-    height: '50%',
-  },
+
   menu: {
     flex: 1,
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  menuImage: {
-    width: '40%',
-    height: '40%',
-    marginBottom: 32,
-  },
+
   playButton: {
     backgroundColor: '#111111',
     paddingHorizontal: 48,
