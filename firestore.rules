@@ -10,6 +10,13 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Web leaderboard: same rules, separate collection.
+    match /leaderboard_web/{entry} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if false;
+    }
+
     // Default deny for everything else.
     match /{document=**} {
       allow read, write: if false;
