@@ -25,6 +25,8 @@ export interface SquigglyLine {
   cachedWiggleSvg: string | null;
   /** Number of path points when the wiggle cache was last built. */
   cachedWiggleLen: number;
+  /** Wiggle animation variant (0, 1, or 2) — assigned randomly at spawn. */
+  wiggleVariant: number;
 }
 
 export interface DotState {
@@ -168,6 +170,7 @@ export function createLine(
     cachedSvgPath: null,
     cachedWiggleSvg: null,
     cachedWiggleLen: 0,
+    wiggleVariant: (Math.random() * 3) | 0,
   };
 }
 

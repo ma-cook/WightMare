@@ -469,8 +469,8 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
               ...snapHead,
             };
             const t = gs.loopTimeSec;
-            bakeWiggle(draggedLine.pathPoints, t);
-            bakeWiggle(snapTarget.pathPoints, t);
+            bakeWiggle(draggedLine.pathPoints, t, draggedLine.wiggleVariant);
+            bakeWiggle(snapTarget.pathPoints, t, snapTarget.wiggleVariant);
             draggedLine.cachedSvgPath = pointsToSvgPath(draggedLine.pathPoints);
             snapTarget.cachedSvgPath = pointsToSvgPath(snapTarget.pathPoints);
             const parentDot = gs.dots.find((d) => d.id === draggedLine.dotId);
@@ -593,7 +593,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
               let isDragging = false;
               for (const lid of gs.draggingMap.values()) { if (lid === line.id) { isDragging = true; break; } }
               const svgPath = line.cachedWiggleSvg
-                || (line.cachedWiggleSvg = pointsToWiggledSvgPath(line.pathPoints, renderTime));
+                || (line.cachedWiggleSvg = pointsToWiggledSvgPath(line.pathPoints, renderTime, line.wiggleVariant));
               const head = headOf(line);
 
               return (

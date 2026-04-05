@@ -41,17 +41,33 @@ export function pointsToSvgPath(points: Point[]): string {
  * Avoids allocating an intermediate wiggled-points array.
  * Uses pre-sized array + direct indexing for minimal allocation.
  */
-export function pointsToWiggledSvgPath(points: Point[], time: number): string {
+/**
+ * Compute wiggle offset for a given point index, time, and variant.
+ * All variants stay within roughly ±2.5 px amplitude.
+ */
+function wiggleOffset(i: number, time: number, variant: number): number {
+  switch (variant) {
+    case 1:
+      // Double-frequency interference — rapid chattery wiggle
+      return Math.sin(i * 4.5 + time * 3.0) * 1.5
+           + Math.sin(i * 1.5 + time * 5.5) * 1.0;
+    case 2:
+      // Slow sweeping snake with high-freq shimmer
+      return Math.cos(i * 2.0 + time * 3.5) * 2.0
+           + Math.sin(i * 5.0 - time * 2.0) * 0.5;
+    default:
+      // Original smooth sine wave
+      return Math.sin(i * 3.0 + time * 4.0) * 2.5;
+  }
+}
+
+export function pointsToWiggledSvgPath(points: Point[], time: number, variant: number = 0): string {
   const n = points.length;
   if (n === 0) return '';
   if (n === 1) return `M ${Math.round(points[0].x)} ${Math.round(points[0].y)}`;
   if (n === 2) {
     return `M ${Math.round(points[0].x)} ${Math.round(points[0].y)} L ${Math.round(points[1].x)} ${Math.round(points[1].y)}`;
   }
-
-  const AMP = 2.5;
-  const FREQ = 3.0;
-  const SPEED = 4.0;
 
   // Pre-sized array: 1 move + (n-2) quad curves + 1 line = n
   const parts = new Array<string>(n);
@@ -64,7 +80,7 @@ export function pointsToWiggledSvgPath(points: Point[], time: number): string {
     const tx = points[2].x - points[0].x;
     const ty = points[2].y - points[0].y;
     const len = Math.sqrt(tx * tx + ty * ty) || 1;
-    const off = Math.sin(FREQ + time * SPEED) * AMP;
+    const off = wiggleOffset(1, time, variant);
     wcx = p.x + (-ty / len) * off;
     wcy = p.y + (tx / len) * off;
   }
@@ -78,7 +94,7 @@ export function pointsToWiggledSvgPath(points: Point[], time: number): string {
       const tx = points[i + 2].x - points[i].x;
       const ty = points[i + 2].y - points[i].y;
       const len = Math.sqrt(tx * tx + ty * ty) || 1;
-      const off = Math.sin((i + 1) * FREQ + time * SPEED) * AMP;
+      const off = wiggleOffset(i + 1, time, variant);
       wcx = p.x + (-ty / len) * off;
       wcy = p.y + (tx / len) * off;
     } else {
@@ -109,19 +125,16 @@ export function pathLength(points: Point[]): number {
  * Bake wiggle offsets into the path points in-place so the bumpy shape
  * is preserved even when rendered with the non-wiggled path builder.
  */
-export function bakeWiggle(points: Point[], time: number): void {
+export function bakeWiggle(points: Point[], time: number, variant: number = 0): void {
   const n = points.length;
   if (n <= 2) return;
-  const AMP = 2.5;
-  const FREQ = 3.0;
-  const SPEED = 4.0;
   for (let i = 1; i < n - 1; i++) {
     const prev = points[i - 1];
     const next = points[i + 1];
     const tx = next.x - prev.x;
     const ty = next.y - prev.y;
     const len = Math.sqrt(tx * tx + ty * ty) || 1;
-    const off = Math.sin(i * FREQ + time * SPEED) * AMP;
+    const off = wiggleOffset(i, time, variant);
     points[i] = {
       x: points[i].x + (-ty / len) * off,
       y: points[i].y + (tx / len) * off,
