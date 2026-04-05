@@ -83,9 +83,9 @@ export const CONNECT_REWARD_WINDOW = 300;
 /** How much the spawn interval grows after a quick connection (ms). */
 export const SPAWN_INTERVAL_INCREASE = 300;
 /** After this many ms, an unconnected line escapes its explore zone (ms). */
-export const ESCAPE_TIME = 4000;
+export const ESCAPE_TIME = 5000;
 /** Max unconnected lines per dot. */
-export const MAX_UNCONNECTED_PER_DOT = 8;
+export const MAX_UNCONNECTED_PER_DOT = 12;
 /** Duration of dot growth animation (ms). */
 export const DOT_GROW_DURATION = 3000;
 /** Spawn interval speedup (ms) when this dot is larger than the other. */

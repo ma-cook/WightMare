@@ -184,28 +184,28 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             SPAWN_INTERVAL_MIN +
             Math.random() * (SPAWN_INTERVAL_MAX - SPAWN_INTERVAL_MIN);
 
-          // Spawn count scales with total connections: 2 base, +2 at 75, +4 at 150
-          const spawnCount = gs.totalConnected >= 150 ? 6
+          // Spawn count scales with total connections: 2 base, +2 at 75, +4 at 150, +6 at 225
+          const spawnCount = gs.totalConnected >= 225 ? 8
+            : gs.totalConnected >= 150 ? 6
             : gs.totalConnected >= 75 ? 4
             : 2;
           // Cap unconnected lines per dot
           const unconnected = dot.lines.filter((l) => l.connectedToId === null).length;
           const allowed = Math.max(0, MAX_UNCONNECTED_PER_DOT - unconnected);
 
-          // Always spawn first 2 immediately
-          const firstBatch = Math.min(2, allowed);
-          for (let si = 0; si < firstBatch; si++) {
-            const angle = Math.random() * Math.PI * 2;
-            dot.lines.push(createLine(dot.id,
-              dot.x + Math.cos(angle) * dot.radius,
-              dot.y + Math.sin(angle) * dot.radius, now));
-          }
-          // Queue second wave (+1 s) and third wave (+2 s) for 4 / 6-count modes
-          if (spawnCount >= 4 && allowed > 2) {
-            dot.pendingBatches.push({ count: Math.min(2, allowed - 2), spawnAt: now + 1000 });
-          }
-          if (spawnCount >= 6 && allowed > 4) {
-            dot.pendingBatches.push({ count: Math.min(2, allowed - 4), spawnAt: now + 2000 });
+          // Spawn lines staggered by 150ms each
+          const toSpawn = Math.min(spawnCount, allowed);
+          for (let si = 0; si < toSpawn; si++) {
+            if (si === 0) {
+              // First line spawns immediately
+              const angle = Math.random() * Math.PI * 2;
+              dot.lines.push(createLine(dot.id,
+                dot.x + Math.cos(angle) * dot.radius,
+                dot.y + Math.sin(angle) * dot.radius, now));
+            } else {
+              // Subsequent lines staggered by 150ms
+              dot.pendingBatches.push({ count: 1, spawnAt: now + si * 150 });
+            }
           }
         }
 
