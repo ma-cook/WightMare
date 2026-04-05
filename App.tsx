@@ -6,7 +6,6 @@ import {
   Pressable,
   StatusBar as RNStatusBar,
   StyleSheet,
-  Text,
   TextInput,
   View,
 } from 'react-native';
@@ -16,7 +15,7 @@ import * as NavigationBar from 'expo-navigation-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import GameCanvas from './components/GameCanvas';
 import Leaderboard from './components/Leaderboard';
-import SquigglyTitle from './components/SquigglyTitle';
+import SquigglyTitle, { SquigglyText } from './components/SquigglyTitle';
 import { fetchTopScores, type LeaderboardEntry } from './services/leaderboard';
 import Svg, { Path } from 'react-native-svg';
 
@@ -123,9 +122,7 @@ export default function App() {
         <StatusBar hidden />
         <SquigglyTitle maxWidth={400} />
         {screen === 'menu' ? (
-          <Pressable style={styles.playButton} onPress={handlePlay}>
-            <Text style={styles.playText}>Play</Text>
-          </Pressable>
+          <SquigglyText text="Play" maxWidth={160} letterHeight={48} delay={2200} onPress={handlePlay} />
         ) : (
           <View style={styles.nameRow}>
             <TextInput
@@ -183,18 +180,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-
-  playButton: {
-    backgroundColor: '#111111',
-    paddingHorizontal: 48,
-    paddingVertical: 16,
-    borderRadius: 8,
-  },
-  playText: {
-    color: '#ffffff',
-    fontSize: 24,
-    fontWeight: '700',
   },
   nameRow: {
     flexDirection: 'row',

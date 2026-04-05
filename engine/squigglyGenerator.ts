@@ -20,18 +20,18 @@ export function pointsToSvgPath(points: Point[]): string {
   if (n === 0) return '';
   if (n === 1) return `M ${Math.round(points[0].x)} ${Math.round(points[0].y)}`;
 
-  const parts: string[] = [`M ${Math.round(points[0].x)} ${Math.round(points[0].y)}`];
+  // Pre-sized array to avoid repeated push + final join
+  const parts = new Array<string>(n);
+  parts[0] = `M ${Math.round(points[0].x)} ${Math.round(points[0].y)}`;
 
   for (let i = 1; i < n - 1; i++) {
     const p = points[i];
     const q = points[i + 1];
-    parts.push(
-      `Q ${Math.round(p.x)} ${Math.round(p.y)} ${Math.round((p.x + q.x) * 0.5)} ${Math.round((p.y + q.y) * 0.5)}`,
-    );
+    parts[i] = `Q ${Math.round(p.x)} ${Math.round(p.y)} ${Math.round((p.x + q.x) * 0.5)} ${Math.round((p.y + q.y) * 0.5)}`;
   }
 
   const last = points[n - 1];
-  parts.push(`L ${Math.round(last.x)} ${Math.round(last.y)}`);
+  parts[n - 1] = `L ${Math.round(last.x)} ${Math.round(last.y)}`;
 
   return parts.join(' ');
 }
@@ -39,6 +39,7 @@ export function pointsToSvgPath(points: Point[]): string {
 /**
  * Merged wiggle + SVG path generation.
  * Avoids allocating an intermediate wiggled-points array.
+ * Uses pre-sized array + direct indexing for minimal allocation.
  */
 export function pointsToWiggledSvgPath(points: Point[], time: number): string {
   const n = points.length;
@@ -52,7 +53,9 @@ export function pointsToWiggledSvgPath(points: Point[], time: number): string {
   const FREQ = 3.0;
   const SPEED = 4.0;
 
-  const parts: string[] = [`M ${Math.round(points[0].x)} ${Math.round(points[0].y)}`];
+  // Pre-sized array: 1 move + (n-2) quad curves + 1 line = n
+  const parts = new Array<string>(n);
+  parts[0] = `M ${Math.round(points[0].x)} ${Math.round(points[0].y)}`;
 
   // Pre-compute wiggled position for index 1
   let wcx: number, wcy: number;
@@ -83,12 +86,10 @@ export function pointsToWiggledSvgPath(points: Point[], time: number): string {
       wcy = points[n - 1].y;
     }
 
-    parts.push(
-      `Q ${Math.round(cx)} ${Math.round(cy)} ${Math.round((cx + wcx) * 0.5)} ${Math.round((cy + wcy) * 0.5)}`,
-    );
+    parts[i] = `Q ${Math.round(cx)} ${Math.round(cy)} ${Math.round((cx + wcx) * 0.5)} ${Math.round((cy + wcy) * 0.5)}`;
   }
 
-  parts.push(`L ${Math.round(points[n - 1].x)} ${Math.round(points[n - 1].y)}`);
+  parts[n - 1] = `L ${Math.round(points[n - 1].x)} ${Math.round(points[n - 1].y)}`;
 
   return parts.join(' ');
 }

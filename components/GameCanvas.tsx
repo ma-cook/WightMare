@@ -90,12 +90,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
   // ─────────────────────────────────────────────────────────────────────────
 
   const findLine = (id: string): SquigglyLine | undefined => {
-    for (const dot of stateRef.current.dots) {
-      for (const line of dot.lines) {
-        if (line.id === id) return line;
-      }
-    }
-    return undefined;
+    return stateRef.current.lineMap.get(id);
   };
 
   const headOf = (line: SquigglyLine): Point =>
@@ -163,14 +158,16 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
         // ── Pending spawn batches (staggered second wave / third wave) ────
         dot.pendingBatches = dot.pendingBatches.filter((batch) => {
           if (now < batch.spawnAt) return true;
-          const unc = dot.lines.filter((l) => l.connectedToId === null).length;
-          const avail = Math.max(0, MAX_UNCONNECTED_PER_DOT - unc);
+          const avail = Math.max(0, MAX_UNCONNECTED_PER_DOT - dot.unconnectedCount);
           const n = Math.min(batch.count, avail);
           for (let si = 0; si < n; si++) {
             const angle = Math.random() * Math.PI * 2;
-            dot.lines.push(createLine(dot.id,
+            const newLine = createLine(dot.id,
               dot.x + Math.cos(angle) * dot.radius,
-              dot.y + Math.sin(angle) * dot.radius, now));
+              dot.y + Math.sin(angle) * dot.radius, now);
+            dot.lines.push(newLine);
+            gs.lineMap.set(newLine.id, newLine);
+            dot.unconnectedCount++;
           }
           return false;
         });
@@ -190,8 +187,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             : gs.totalConnected >= 75 ? 4
             : 2;
           // Cap unconnected lines per dot
-          const unconnected = dot.lines.filter((l) => l.connectedToId === null).length;
-          const allowed = Math.max(0, MAX_UNCONNECTED_PER_DOT - unconnected);
+          const allowed = Math.max(0, MAX_UNCONNECTED_PER_DOT - dot.unconnectedCount);
 
           // Spawn lines staggered by 150ms each
           const toSpawn = Math.min(spawnCount, allowed);
@@ -199,9 +195,12 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             if (si === 0) {
               // First line spawns immediately
               const angle = Math.random() * Math.PI * 2;
-              dot.lines.push(createLine(dot.id,
+              const newLine = createLine(dot.id,
                 dot.x + Math.cos(angle) * dot.radius,
-                dot.y + Math.sin(angle) * dot.radius, now));
+                dot.y + Math.sin(angle) * dot.radius, now);
+              dot.lines.push(newLine);
+              gs.lineMap.set(newLine.id, newLine);
+              dot.unconnectedCount++;
             } else {
               // Subsequent lines staggered by 150ms
               dot.pendingBatches.push({ count: 1, spawnAt: now + si * 150 });
@@ -304,6 +303,9 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             // Push a new live-head slot; the current newHead becomes committed
             line.pathPoints.push({ ...newHead });
 
+            // Invalidate wiggle cache — will be rebuilt at render time
+            line.cachedWiggleSvg = null;
+
             // Mark coverage cell
             dot.coveredCells.add(
               packCell((newHead.x * INV_CELL_SIZE) | 0, (newHead.y * INV_CELL_SIZE) | 0),
@@ -360,7 +362,11 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
       }
 
       gs.loopTimeSec = timestamp * 0.001;
-      triggerRender();
+      gs.frameCount++;
+      // Throttle React renders to ~30fps (every other frame) to halve reconciliation cost
+      if (gs.frameCount % 2 === 0) {
+        triggerRender();
+      }
     },
     [width, height, triggerRender],
   );
@@ -407,6 +413,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
 
           if (distanceSq(prev, newPt) >= POINT_SAMPLE_DISTANCE_SQ) {
             line.pathPoints.push(newPt);
+            line.cachedWiggleSvg = null; // invalidate wiggle cache
             if (line.pathPoints.length > MAX_PATH_POINTS) {
               line.pathPoints = compressPath(line.pathPoints);
             }
@@ -442,6 +449,11 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             draggedLine.connectedToId = snapTarget.id;
             snapTarget.connectedToId = draggedLine.id;
             gs.totalConnected++;
+            // Decrement unconnected counter for the parent dot
+            const parentDotForCounter = gs.dots.find((d) => d.id === draggedLine.dotId);
+            if (parentDotForCounter) {
+              parentDotForCounter.unconnectedCount -= 2; // both lines are now connected
+            }
             const parentDotForReward = gs.dots.find((d) => d.id === draggedLine.dotId);
             if (parentDotForReward) {
               const age = Date.now() - draggedLine.spawnTime;
@@ -580,7 +592,8 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
               if (line.connectedToId !== null) return null;
               let isDragging = false;
               for (const lid of gs.draggingMap.values()) { if (lid === line.id) { isDragging = true; break; } }
-              const svgPath = pointsToWiggledSvgPath(line.pathPoints, renderTime);
+              const svgPath = line.cachedWiggleSvg
+                || (line.cachedWiggleSvg = pointsToWiggledSvgPath(line.pathPoints, renderTime));
               const head = headOf(line);
 
               return (
@@ -619,9 +632,11 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             const segments = Math.min(36, Math.max(24, Math.round(r * 2)));
             const step = (Math.PI * 2) / segments;
 
-            // Compute bumpy radii into a flat Float32 pair buffer [x,y,...]
+            // Compute bumpy radii into a flat Float64 pair buffer [x,y,...]
             // to avoid allocating an object per segment.
-            const buf = new Float64Array(segments * 2);
+            const needed = segments * 2;
+            if (dot._dotBuf.length < needed) dot._dotBuf = new Float64Array(needed);
+            const buf = dot._dotBuf;
             for (let i = 0; i < segments; i++) {
               const angle = i * step;
               const bump =
@@ -634,7 +649,8 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
 
             // Build smooth closed cubic-bezier path (Catmull-Rom, tension 1/6)
             const n = segments;
-            let dotPath = `M ${Math.round(buf[0])} ${Math.round(buf[1])}`;
+            const dotParts = new Array<string>(n + 2);
+            dotParts[0] = `M ${Math.round(buf[0])} ${Math.round(buf[1])}`;
             for (let i = 0; i < n; i++) {
               const i0 = ((i - 1 + n) % n) * 2;
               const i1 = i * 2;
@@ -644,9 +660,10 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
               const cp1y = buf[i1 + 1] + (buf[i2 + 1] - buf[i0 + 1]) / 6;
               const cp2x = buf[i2] - (buf[i3] - buf[i1]) / 6;
               const cp2y = buf[i2 + 1] - (buf[i3 + 1] - buf[i1 + 1]) / 6;
-              dotPath += ` C ${Math.round(cp1x)} ${Math.round(cp1y)}, ${Math.round(cp2x)} ${Math.round(cp2y)}, ${Math.round(buf[i2])} ${Math.round(buf[i2 + 1])}`;
+              dotParts[i + 1] = `C ${Math.round(cp1x)} ${Math.round(cp1y)}, ${Math.round(cp2x)} ${Math.round(cp2y)}, ${Math.round(buf[i2])} ${Math.round(buf[i2 + 1])}`;
             }
-            dotPath += ' Z';
+            dotParts[n + 1] = 'Z';
+            const dotPath = dotParts.join(' ');
             return (
               <Path
                 key={dot.id}
@@ -662,7 +679,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             if (r < 18) return null;
             // More flecks as the dot grows: 1 at r≈18, up to 15 at r≈50+
             const FLECK_COUNT = Math.min(15, Math.max(1, Math.floor((r - 15) / 2.5)));
-            let fleckPath = '';
+            const fleckParts: string[] = [];
             for (let i = 0; i < FLECK_COUNT; i++) {
               const phase = i * 1.618 + dotIdx * 2.4;
               // Per-fleck pseudorandom blink — halved frequencies for slower rhythm
@@ -681,15 +698,15 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
               const ey = oy + Math.sin(sweep) * len;
               const qx = ox + Math.cos(ctrl) * len * 0.7;
               const qy = oy + Math.sin(ctrl) * len * 0.7;
-              fleckPath += `M ${Math.round(ox)} ${Math.round(oy)} Q ${Math.round(qx)} ${Math.round(qy)} ${Math.round(ex)} ${Math.round(ey)} `;
+              fleckParts.push(`M ${Math.round(ox)} ${Math.round(oy)} Q ${Math.round(qx)} ${Math.round(qy)} ${Math.round(ex)} ${Math.round(ey)}`);
             }
-            if (!fleckPath) return null;
+            if (fleckParts.length === 0) return null;
             // Slower overall opacity pulse
             const opacity = 0.15 + 0.35 * ((Math.sin(renderTime * 0.4 + dotIdx * 1.5) + 1) / 2);
             return (
               <Path
                 key={`${dot.id}-flecks`}
-                d={fleckPath}
+                d={fleckParts.join(' ')}
                 stroke="#777777"
                 strokeWidth={1}
                 fill="none"

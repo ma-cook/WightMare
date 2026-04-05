@@ -21,6 +21,10 @@ export interface SquigglyLine {
   penaltyApplied: boolean;
   /** Cached SVG path string — set once on connection, avoids re-generating every frame. */
   cachedSvgPath: string | null;
+  /** Cached wiggled SVG path string — rebuilt only when points change. */
+  cachedWiggleSvg: string | null;
+  /** Number of path points when the wiggle cache was last built. */
+  cachedWiggleLen: number;
 }
 
 export interface DotState {
@@ -50,6 +54,10 @@ export interface DotState {
   growStartRadius: number;
   /** Deferred spawn batches: lines to create at a future timestamp. */
   pendingBatches: Array<{ count: number; spawnAt: number }>;
+  /** Count of unconnected lines — maintained incrementally to avoid filter() each frame. */
+  unconnectedCount: number;
+  /** Pre-allocated buffer for dot circle rendering (avoids per-frame allocation). */
+  _dotBuf: Float64Array;
 }
 
 export interface GameState {
@@ -64,6 +72,10 @@ export interface GameState {
   loopTimeSec: number;
   /** Total number of line-pairs successfully connected so far. */
   totalConnected: number;
+  /** Fast O(1) lookup from line id → SquigglyLine. */
+  lineMap: Map<string, SquigglyLine>;
+  /** Frame counter — used for render throttling. */
+  frameCount: number;
 }
 
 // ─── Tunable constants ───────────────────────────────────────────────────────
@@ -154,6 +166,8 @@ export function createLine(
     spawnTime: now,
     penaltyApplied: false,
     cachedSvgPath: null,
+    cachedWiggleSvg: null,
+    cachedWiggleLen: 0,
   };
 }
 
@@ -173,6 +187,8 @@ export function createInitialState(width: number, height: number): GameState {
     draggingMap: new Map(),
     loopTimeSec: 0,
     totalConnected: 0,
+    lineMap: new Map(),
+    frameCount: 0,
     dots: [
       {
         id: 'dot-left',
@@ -190,6 +206,8 @@ export function createInitialState(width: number, height: number): GameState {
         growStartTime: 0,
         growStartRadius: INITIAL_DOT_RADIUS,
         pendingBatches: [],
+        unconnectedCount: 0,
+        _dotBuf: new Float64Array(72),
       },
       {
         id: 'dot-right',
@@ -207,6 +225,8 @@ export function createInitialState(width: number, height: number): GameState {
         growStartTime: 0,
         growStartRadius: INITIAL_DOT_RADIUS,
         pendingBatches: [],
+        unconnectedCount: 0,
+        _dotBuf: new Float64Array(72),
       },
     ],
   };

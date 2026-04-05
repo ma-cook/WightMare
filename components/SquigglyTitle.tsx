@@ -4,7 +4,7 @@
  * Final letters have jagged, broken squiggly spurs poking out.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 // ─── Letter path data (designed on a 40×50 grid) ────────────────────────────
@@ -50,9 +50,17 @@ const LETTER_PATHS: Record<string, Segment[]> = {
     [28, 10, 34, 16], [8, 28, 8, 38], [8, 38, 14, 44], [14, 44, 28, 44],
     [28, 44, 34, 38],
   ],
+  P: [
+    [6, 45, 6, 5], [6, 5, 28, 5], [28, 5, 34, 10], [34, 10, 34, 20],
+    [34, 20, 28, 26], [28, 26, 6, 26],
+  ],
+  l: [
+    [18, 5, 18, 45],
+  ],
+  y: [
+    [6, 5, 20, 28], [34, 5, 20, 28], [20, 28, 20, 45],
+  ],
 };
-
-const TITLE = 'WightMare';
 
 // ─── Spur data: decorative broken squiggly lines poking out of each letter ──
 // Each spur: [x, y, angle in radians, length]
@@ -146,9 +154,10 @@ interface LetterProps {
   index: number;
   letterWidth: number;
   letterHeight: number;
+  baseDelay?: number;
 }
 
-function AnimatedLetter({ letter, index, letterWidth, letterHeight }: LetterProps) {
+function AnimatedLetter({ letter, index, letterWidth, letterHeight, baseDelay = 0 }: LetterProps) {
   const [progress, setProgress] = useState(0);
   const [time, setTime] = useState(0);
   const startRef = useRef(0);
@@ -156,7 +165,7 @@ function AnimatedLetter({ letter, index, letterWidth, letterHeight }: LetterProp
   const spursRef = useRef(generateSpurs(letter));
 
   useEffect(() => {
-    const delay = index * LETTER_STAGGER;
+    const delay = baseDelay + index * LETTER_STAGGER;
     const timeout = setTimeout(() => {
       startRef.current = performance.now();
       const animate = (now: number) => {
@@ -269,20 +278,24 @@ function AnimatedLetter({ letter, index, letterWidth, letterHeight }: LetterProp
 
 // ─── Main title component ───────────────────────────────────────────────────
 
-interface TitleProps {
-  /** Total width available for the title */
+interface SquigglyTextProps {
+  text: string;
   maxWidth?: number;
+  /** Height of letters (default 64) */
+  letterHeight?: number;
+  /** Delay before the animation starts (ms) */
+  delay?: number;
+  onPress?: () => void;
 }
 
-export default function SquigglyTitle({ maxWidth = 500 }: TitleProps) {
-  const letters = TITLE.split('');
-  // Uppercase letters are wider
+export function SquigglyText({ text, maxWidth = 500, letterHeight: heightProp = 64, delay = 0, onPress }: SquigglyTextProps) {
+  const letters = text.split('');
   const widths = letters.map((l) => (l === l.toUpperCase() ? 48 : 34));
   const totalW = widths.reduce((a, b) => a + b, 0);
   const scale = Math.min(1, maxWidth / totalW);
-  const letterHeight = 64 * scale;
+  const letterHeight = heightProp * scale;
 
-  return (
+  const content = (
     <View style={styles.container}>
       {letters.map((letter, i) => (
         <AnimatedLetter
@@ -291,10 +304,24 @@ export default function SquigglyTitle({ maxWidth = 500 }: TitleProps) {
           index={i}
           letterWidth={widths[i] * scale}
           letterHeight={letterHeight}
+          baseDelay={delay}
         />
       ))}
     </View>
   );
+
+  if (onPress) {
+    return <Pressable onPress={onPress}>{content}</Pressable>;
+  }
+  return content;
+}
+
+interface TitleProps {
+  maxWidth?: number;
+}
+
+export default function SquigglyTitle({ maxWidth = 500 }: TitleProps) {
+  return <SquigglyText text="WightMare" maxWidth={maxWidth} />;
 }
 
 const styles = StyleSheet.create({
