@@ -10,12 +10,17 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true
     },
     "android": {
+      "package": "com.macook.wightmare",
+      "versionCode": 2,
       "adaptiveIcon": {
+        "foregroundImage": "./assests/image (5).png",
         "backgroundColor": "#ffffff"
       }
     },
@@ -25,6 +30,12 @@
     },
     "web": {
       "bundler": "metro"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "867a81a6-c9f7-4060-a372-9a803114fa94"
+      }
+    },
+    "owner": "mitchmaster"
   }
 }

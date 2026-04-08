@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   AppState,
   Dimensions,
+  Linking,
   Platform,
   Pressable,
   StatusBar as RNStatusBar,
   StyleSheet,
+  Text,
   TextInput,
   View,
 } from 'react-native';
@@ -151,6 +153,14 @@ export default function App() {
             <Leaderboard entries={topScores} />
           </View>
         )}
+        {Platform.OS === 'web' && (
+          <Pressable
+            style={styles.privacyButton}
+            onPress={() => Linking.openURL('/privacy-policy.html')}
+          >
+            <Text style={styles.privacyButtonText}>Privacy Policy</Text>
+          </Pressable>
+        )}
       </View>
     );
 
@@ -220,5 +230,17 @@ const styles = StyleSheet.create({
     width: '25%',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  privacyButton: {
+    position: 'absolute',
+    bottom: 16,
+    right: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  privacyButtonText: {
+    fontSize: 12,
+    color: '#999999',
+    textDecorationLine: 'underline',
   },
 });

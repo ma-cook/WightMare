@@ -21,3 +21,8 @@ yarn-error.*
 
 # Firebase Admin SDK service account key — NEVER commit
 wightmare-4fd5e-firebase-adminsdk-*.json
+
+# Google Play service account key — NEVER commit
+google-play-service-account.json
+wightmare-4fd5e-ad857070fd4f.json
+
