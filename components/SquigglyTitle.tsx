@@ -76,6 +76,42 @@ const LETTER_PATHS: Record<string, Segment[]> = {
   v: [
     [6, 5, 20, 45], [34, 5, 20, 45],
   ],
+  C: [
+    [32, 10, 22, 5], [22, 5, 12, 5], [12, 5, 6, 14], [6, 14, 6, 36],
+    [6, 36, 12, 45], [12, 45, 22, 45], [22, 45, 32, 40],
+  ],
+  o: [
+    [20, 12, 28, 18], [28, 18, 28, 34], [28, 34, 20, 40], [20, 40, 12, 34],
+    [12, 34, 12, 18], [12, 18, 20, 12],
+  ],
+  n: [
+    [8, 45, 8, 14], [8, 18, 14, 14], [14, 14, 22, 12], [22, 12, 28, 16],
+    [28, 16, 32, 22], [32, 22, 32, 45],
+  ],
+  c: [
+    [30, 16, 22, 10], [22, 10, 12, 10], [12, 10, 8, 18], [8, 18, 8, 32],
+    [8, 32, 12, 40], [12, 40, 22, 40], [22, 40, 30, 34],
+  ],
+  s: [
+    [28, 14, 18, 10], [18, 10, 10, 12], [10, 12, 8, 18], [8, 18, 14, 24],
+    [14, 24, 22, 26], [22, 26, 28, 32], [28, 32, 20, 40], [20, 40, 10, 40],
+    [10, 40, 8, 36],
+  ],
+  S: [
+    [34, 10, 24, 5], [24, 5, 14, 5], [14, 5, 6, 12], [6, 12, 6, 18],
+    [6, 18, 14, 24], [14, 24, 26, 26], [26, 26, 34, 32], [34, 32, 34, 38],
+    [34, 38, 24, 45], [24, 45, 14, 45], [14, 45, 6, 40],
+  ],
+  u: [
+    [8, 14, 8, 34], [8, 34, 12, 40], [12, 40, 20, 42], [20, 42, 28, 36],
+    [28, 36, 28, 14],
+  ],
+  '-': [
+    [8, 26, 32, 26],
+  ],
+  '!': [
+    [20, 5, 20, 33], [20, 40, 20, 46],
+  ],
 };
 
 // ─── Spur data: decorative broken squiggly lines poking out of each letter ──
@@ -174,27 +210,33 @@ interface LetterProps {
   animDuration?: number;
   color?: string;
   strokeWidth?: number;
+  stagger?: number;
+  wobble?: boolean;
 }
 
-function AnimatedLetter({ letter, index, letterWidth, letterHeight, baseDelay = 0, animDuration = ANIM_DURATION, color = '#111111', strokeWidth: sw = 2.5 }: LetterProps) {
-  const [progress, setProgress] = useState(0);
+function AnimatedLetter({ letter, index, letterWidth, letterHeight, baseDelay = 0, animDuration = ANIM_DURATION, color = '#111111', strokeWidth: sw = 2.5, stagger = 0, wobble = true }: LetterProps) {
+  const [progress, setProgress] = useState(animDuration <= 0 ? 1 : 0);
   const [time, setTime] = useState(0);
   const startRef = useRef(0);
   const rafRef = useRef(0);
+  const wobbleRef = useRef(wobble);
+  wobbleRef.current = wobble;
   const spursRef = useRef(generateSpurs(letter));
 
   useEffect(() => {
     if (animDuration <= 0) {
-      setProgress(1);
-      setTime(performance.now() * 0.001);
-      const postAnimate = (now2: number) => {
-        setTime(now2 * 0.001);
+      if (wobble) {
+        const postAnimate = (now2: number) => {
+          if (!wobbleRef.current) return;
+          setTime(now2 * 0.001);
+          rafRef.current = requestAnimationFrame(postAnimate);
+        };
         rafRef.current = requestAnimationFrame(postAnimate);
-      };
-      rafRef.current = requestAnimationFrame(postAnimate);
-      return () => cancelAnimationFrame(rafRef.current);
+        return () => cancelAnimationFrame(rafRef.current);
+      }
+      return;
     }
-    const delay = baseDelay + index * LETTER_STAGGER;
+    const delay = baseDelay + index * stagger;
     const timeout = setTimeout(() => {
       startRef.current = performance.now();
       const animate = (now: number) => {
@@ -207,12 +249,14 @@ function AnimatedLetter({ letter, index, letterWidth, letterHeight, baseDelay = 
         if (p < 1) {
           rafRef.current = requestAnimationFrame(animate);
         } else {
-          // Keep animating time for post-completion wobble
-          const postAnimate = (now2: number) => {
-            setTime(now2 * 0.001);
+          if (wobbleRef.current) {
+            const postAnimate = (now2: number) => {
+              if (!wobbleRef.current) return;
+              setTime(now2 * 0.001);
+              rafRef.current = requestAnimationFrame(postAnimate);
+            };
             rafRef.current = requestAnimationFrame(postAnimate);
-          };
-          rafRef.current = requestAnimationFrame(postAnimate);
+          }
         }
       };
       rafRef.current = requestAnimationFrame(animate);
@@ -320,10 +364,13 @@ interface SquigglyTextProps {
   color?: string;
   /** SVG stroke width (default 2.5) */
   strokeWidth?: number;
+  /** ms delay between each letter starting to draw (left-to-right effect) */
+  letterStagger?: number;
+  wobble?: boolean;
   onPress?: () => void;
 }
 
-export function SquigglyText({ text, maxWidth = 500, letterHeight: heightProp = 64, delay = 0, animDuration, color, strokeWidth, onPress }: SquigglyTextProps) {
+export function SquigglyText({ text, maxWidth = 500, letterHeight: heightProp = 64, delay = 0, animDuration, color, strokeWidth, letterStagger = 0, wobble = true, onPress }: SquigglyTextProps) {
   const letters = text.split('');
   const widths = letters.map((l) => (l === ' ' ? 20 : l === l.toUpperCase() ? 48 : 34));
   const totalW = widths.reduce((a, b) => a + b, 0);
@@ -343,6 +390,8 @@ export function SquigglyText({ text, maxWidth = 500, letterHeight: heightProp = 
             letterWidth={widths[i] * scale}
             letterHeight={letterHeight}
             baseDelay={delay}
+            stagger={letterStagger}
+            wobble={wobble}
             {...(animDuration !== undefined ? { animDuration } : {})}
             {...(color ? { color } : {})}
             {...(strokeWidth !== undefined ? { strokeWidth } : {})}
@@ -360,10 +409,11 @@ export function SquigglyText({ text, maxWidth = 500, letterHeight: heightProp = 
 
 interface TitleProps {
   maxWidth?: number;
+  wobble?: boolean;
 }
 
-export default function SquigglyTitle({ maxWidth = 500 }: TitleProps) {
-  return <SquigglyText text="WightMare" maxWidth={maxWidth} />;
+export default function SquigglyTitle({ maxWidth = 500, wobble = true }: TitleProps) {
+  return <SquigglyText text="WightMare" maxWidth={maxWidth} wobble={wobble} />;
 }
 
 // ─── Animated dot that surrounds content (used for Play button) ─────────────
@@ -380,14 +430,18 @@ interface AnimatedDotWrapperProps {
   height: number;
   children: React.ReactNode;
   onPress?: () => void;
+  wobble?: boolean;
 }
 
-export function AnimatedDotWrapper({ width: ovalW, height: ovalH, children, onPress }: AnimatedDotWrapperProps) {
+export function AnimatedDotWrapper({ width: ovalW, height: ovalH, children, onPress, wobble = true }: AnimatedDotWrapperProps) {
   const [time, setTime] = useState(0);
   const rafRef = useRef(0);
+  const wobbleRef = useRef(wobble);
+  wobbleRef.current = wobble;
 
   useEffect(() => {
     const animate = (now: number) => {
+      if (!wobbleRef.current) return;
       setTime(now * 0.001);
       rafRef.current = requestAnimationFrame(animate);
     };

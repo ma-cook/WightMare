@@ -110,6 +110,15 @@ export default function App() {
     setScreen('menu');
   }, []);
 
+  const [introAnimDone, setIntroAnimDone] = useState(false);
+
+  useEffect(() => {
+    if (screen !== 'menu') return;
+    setIntroAnimDone(false);
+    const t = setTimeout(() => setIntroAnimDone(true), 2200);
+    return () => clearTimeout(t);
+  }, [screen]);
+
   if (!ready)
     return (
       <View style={styles.splash}>
@@ -123,12 +132,26 @@ export default function App() {
       <View style={styles.menu}>
         <StatusBar hidden />
         <View style={styles.titleWrap}>
-          <SquigglyTitle maxWidth={400} />
+          <SquigglyTitle maxWidth={400} wobble={!introAnimDone} />
         </View>
         {screen === 'menu' ? (
-          <AnimatedDotWrapper width={140} height={56} onPress={handlePlay}>
-            <SquigglyText text="Play" maxWidth={120} letterHeight={36} delay={0} animDuration={500} color="#ffffff" />
-          </AnimatedDotWrapper>
+          <>
+            <Pressable style={styles.playBar} onPress={handlePlay}>
+              <SquigglyText text="Play" maxWidth={120} letterHeight={36} delay={0} animDuration={500} color="#ffffff" wobble={!introAnimDone} />
+            </Pressable>
+            <View style={styles.taglineWrap}>
+              <SquigglyText
+                text="Connect the lines - Survive!"
+                maxWidth={380}
+                letterHeight={44}
+                animDuration={0}
+                letterStagger={0}
+                strokeWidth={1.5}
+                color="#555555"
+                wobble={false}
+              />
+            </View>
+          </>
         ) : (
           <View style={styles.nameRow}>
             <TextInput
@@ -136,16 +159,16 @@ export default function App() {
               value={nameInput}
               onChangeText={setNameInput}
               placeholder="Enter gamertag"
-              placeholderTextColor="#999"
+              placeholderTextColor="#aaaaaa"
               maxLength={20}
               autoFocus
               onSubmitEditing={handleStartGame}
             />
-            <Pressable style={styles.arrowButton} onPress={handleStartGame}>
+            <AnimatedDotWrapper width={56} height={56} onPress={handleStartGame}>
               <Svg width={24} height={24} viewBox="0 0 24 24">
-                <Path d="M10 6l6 6-6 6" stroke="#fff" strokeWidth={3} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                <Path d="M10 6l6 6-6 6" stroke="#111" strokeWidth={3} fill="none" strokeLinecap="round" strokeLinejoin="round" />
               </Svg>
-            </Pressable>
+            </AnimatedDotWrapper>
           </View>
         )}
         {topScores.length > 0 && (
@@ -196,8 +219,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   titleWrap: {
-    marginBottom: 56,
+    marginBottom: 20,
     marginTop: -40,
+  },
+  taglineWrap: {
+    marginTop: 20,
+  },
+  playBar: {
+    width: '20%',
+    backgroundColor: '#111111',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
   },
   nameRow: {
     flexDirection: 'row',
@@ -205,26 +238,20 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   nameInput: {
-    backgroundColor: '#111111',
-    color: '#ffffff',
+    backgroundColor: '#ffffff',
+    color: '#111111',
     fontSize: 20,
     fontWeight: '700',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingVertical: 14,
-    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#111111',
+    borderRadius: 0,
     width: 240,
-  },
-  arrowButton: {
-    backgroundColor: '#111111',
-    width: 52,
-    height: 52,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   leaderboardMenuWrap: {
     position: 'absolute',
-    left: 0,
+    left: 20,
     top: 0,
     bottom: 0,
     width: '25%',

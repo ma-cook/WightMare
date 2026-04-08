@@ -53,7 +53,7 @@ export default function Leaderboard({ entries }: Props) {
         <Text style={styles.title}>Leaderboard</Text>
       </View>
       <View style={styles.column}>
-        {entries.slice(0, 10).map((e, i) => (
+        {entries.slice(0, 9).map((e, i) => (
           <Text key={i} style={styles.entry}>
             {i + 1}. {e.name}  {formatTime(e.time)}
           </Text>
@@ -66,6 +66,10 @@ export default function Leaderboard({ entries }: Props) {
 const styles = StyleSheet.create({
   container: {
     alignItems: 'flex-start',
+    backgroundColor: 'rgba(240, 240, 240, 0.72)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
   titleRow: {
     flexDirection: 'row',
@@ -74,9 +78,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   title: {
-    fontFamily: 'serif',
-    fontStyle: 'italic',
-    fontWeight: '900',
+    fontFamily: Platform.OS === 'web' ? 'Georgia, "Times New Roman", serif' : 'serif',
+    fontStyle: 'normal',
+    fontWeight: '700',
     fontSize: 16,
     color: '#FF0000',
     letterSpacing: 1,
@@ -86,9 +90,9 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   entry: {
-    fontFamily: 'serif',
-    fontStyle: 'italic',
-    fontWeight: '900',
+    fontFamily: Platform.OS === 'web' ? 'Georgia, "Times New Roman", serif' : 'serif',
+    fontStyle: 'normal',
+    fontWeight: '700',
     fontSize: 14,
     color: '#FF0000',
     letterSpacing: 1,
