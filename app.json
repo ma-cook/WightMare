@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.macook.wightmare",
-      "versionCode": 2,
+      "versionCode": 3,
       "adaptiveIcon": {
         "foregroundImage": "./assests/image (5).png",
         "backgroundColor": "#ffffff"

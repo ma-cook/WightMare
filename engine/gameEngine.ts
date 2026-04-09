@@ -46,8 +46,18 @@ export interface DotState {
   coveredCells: Set<number>;
   /** True when new cells have been added since last coverage check. */
   coverageDirty: boolean;
+  /** Individual SVG path strings for connected lines — joined on demand. */
+  connectedPaths: string[];
   /** Combined SVG path string for ALL connected lines — one <Path> instead of N. */
   cachedConnectedSvg: string;
+  /** True when connectedPaths changed and cachedConnectedSvg needs rebuild. */
+  connectedSvgDirty: boolean;
+  /** Cached fleck SVG path string. */
+  cachedFleckSvg: string;
+  /** Cached fleck opacity. */
+  cachedFleckOpacity: number;
+  /** Frame count when fleck cache was last computed. */
+  cachedFleckFrame: number;
   /** The radius the dot is growing toward (may differ from radius during animation). */
   targetRadius: number;
   /** Timestamp (ms) when the current growth animation started, or 0 if idle. */
@@ -204,7 +214,12 @@ export function createInitialState(width: number, height: number): GameState {
         connectedPathLength: 0,
         coveredCells: new Set<number>(),
         coverageDirty: false,
+        connectedPaths: [],
         cachedConnectedSvg: '',
+        connectedSvgDirty: false,
+        cachedFleckSvg: '',
+        cachedFleckOpacity: 0,
+        cachedFleckFrame: -1,
         targetRadius: INITIAL_DOT_RADIUS,
         growStartTime: 0,
         growStartRadius: INITIAL_DOT_RADIUS,
@@ -223,7 +238,12 @@ export function createInitialState(width: number, height: number): GameState {
         connectedPathLength: 0,
         coveredCells: new Set<number>(),
         coverageDirty: false,
+        connectedPaths: [],
         cachedConnectedSvg: '',
+        connectedSvgDirty: false,
+        cachedFleckSvg: '',
+        cachedFleckOpacity: 0,
+        cachedFleckFrame: -1,
         targetRadius: INITIAL_DOT_RADIUS,
         growStartTime: 0,
         growStartRadius: INITIAL_DOT_RADIUS,

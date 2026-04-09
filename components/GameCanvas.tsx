@@ -18,7 +18,7 @@ import {
   View,
   type NativeTouchEvent,
 } from 'react-native';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 
 import {
   CELL_SIZE,
@@ -134,6 +134,9 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
       // Update survival time
       gs.survivalTime = (now - gs.startTime) / 1000;
 
+      // Build dragged-line ID set once per frame for O(1) lookups
+      const draggedLineIds = new Set(gs.draggingMap.values());
+
       for (const dot of gs.dots) {
         // ── Animate radius toward targetRadius ─────────────────────────────
         if (dot.radius < dot.targetRadius) {
@@ -151,7 +154,8 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
         }
 
         // ── Determine spawn interval boost for larger dot ──────────────────
-        const otherDot = gs.dots.find((d) => d.id !== dot.id);
+        const dotIndex = gs.dots.indexOf(dot);
+        const otherDot = gs.dots[1 - dotIndex];
         const isLarger = otherDot ? dot.targetRadius > otherDot.targetRadius : false;
         const spawnBoost = isLarger ? LARGER_DOT_SPAWN_BOOST : 0;
 
@@ -230,11 +234,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
 
           // ── Skip lines that are connected or being dragged ───────────────
           if (line.connectedToId !== null) continue;
-          let _beingDragged = false;
-          for (const lid of gs.draggingMap.values()) {
-            if (lid === line.id) { _beingDragged = true; break; }
-          }
-          if (_beingDragged) continue;
+          if (gs.draggingMap.size > 0 && draggedLineIds.has(line.id)) continue;
 
           // ── Move head ────────────────────────────────────────────────────
           const prevHead = headOf(line);
@@ -459,17 +459,14 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             draggedLine.connectedToId = snapTarget.id;
             snapTarget.connectedToId = draggedLine.id;
             gs.totalConnected++;
-            // Decrement unconnected counter for the parent dot
-            const parentDotForCounter = gs.dots.find((d) => d.id === draggedLine.dotId);
-            if (parentDotForCounter) {
-              parentDotForCounter.unconnectedCount -= 2; // both lines are now connected
-            }
-            const parentDotForReward = gs.dots.find((d) => d.id === draggedLine.dotId);
-            if (parentDotForReward) {
+            const parentDot = gs.dots.find((d) => d.id === draggedLine.dotId);
+            if (parentDot) {
+              // Decrement unconnected counter for the parent dot
+              parentDot.unconnectedCount -= 2; // both lines are now connected
               const age = Date.now() - draggedLine.spawnTime;
               if (age <= CONNECT_REWARD_WINDOW) {
-                parentDotForReward.spawnInterval = Math.min(
-                  parentDotForReward.spawnInterval + SPAWN_INTERVAL_INCREASE,
+                parentDot.spawnInterval = Math.min(
+                  parentDot.spawnInterval + SPAWN_INTERVAL_INCREASE,
                   SPAWN_INTERVAL_MAX,
                 );
               }
@@ -483,11 +480,13 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             bakeWiggle(snapTarget.pathPoints, t, snapTarget.wiggleVariant);
             draggedLine.cachedSvgPath = pointsToSvgPath(draggedLine.pathPoints);
             snapTarget.cachedSvgPath = pointsToSvgPath(snapTarget.pathPoints);
-            const parentDot = gs.dots.find((d) => d.id === draggedLine.dotId);
             if (parentDot) {
-              parentDot.cachedConnectedSvg +=
-                ' ' + draggedLine.cachedSvgPath +
-                ' ' + snapTarget.cachedSvgPath;
+              parentDot.connectedPaths.push(draggedLine.cachedSvgPath, snapTarget.cachedSvgPath);
+              parentDot.connectedSvgDirty = true;
+              // Remove connected lines from dot.lines to stop iterating them each frame
+              parentDot.lines = parentDot.lines.filter(
+                (l) => l.id !== draggedLine.id && l.id !== snapTarget.id,
+              );
               for (const pt of draggedLine.pathPoints) {
                 parentDot.coveredCells.add(
                   packCell((pt.x * INV_CELL_SIZE) | 0, (pt.y * INV_CELL_SIZE) | 0),
@@ -570,6 +569,9 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
   const gs = stateRef.current;
   const renderTime = gs.loopTimeSec;
 
+  // Build dragged-line ID set once per render for O(1) lookups
+  const renderDraggedIds = new Set(gs.draggingMap.values());
+
   return (
     <View style={styles.container}>
       {/* Touch / mouse capture layer */}
@@ -583,8 +585,13 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
       >
         <Svg width={width} height={height} style={styles.svg}>
           {/* Connected lines — one single <Path> per dot for all connected lines */}
-          {gs.dots.map((dot: DotState) =>
-            dot.cachedConnectedSvg ? (
+          {gs.dots.map((dot: DotState) => {
+            // Lazily rebuild the joined SVG string when new paths were added
+            if (dot.connectedSvgDirty) {
+              dot.cachedConnectedSvg = dot.connectedPaths.join(' ');
+              dot.connectedSvgDirty = false;
+            }
+            return dot.cachedConnectedSvg ? (
               <Path
                 key={`${dot.id}-connected`}
                 d={dot.cachedConnectedSvg}
@@ -594,44 +601,62 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-            ) : null,
-          )}
-          {/* Active (unconnected) lines — rendered individually */}
-          {gs.dots.map((dot: DotState) =>
-            dot.lines.map((line: SquigglyLine) => {
-              if (line.connectedToId !== null) return null;
-              let isDragging = false;
-              for (const lid of gs.draggingMap.values()) { if (lid === line.id) { isDragging = true; break; } }
+            ) : null;
+          })}
+          {/* Active (unconnected) lines — batched into merged <Path> per dot */}
+          {gs.dots.map((dot: DotState) => {
+            const pathParts: string[] = [];
+            const outerCircles: string[] = [];
+            const innerCirclesLeft: string[] = [];
+            const innerCirclesRight: string[] = [];
+            let hasDragging = false;
+            const dragOuterCircles: string[] = [];
+            const dragInnerLeft: string[] = [];
+            const dragInnerRight: string[] = [];
+
+            for (const line of dot.lines) {
+              if (line.connectedToId !== null) continue;
+              const isDragging = renderDraggedIds.has(line.id);
               const svgPath = line.cachedWiggleSvg
                 || (line.cachedWiggleSvg = pointsToWiggledSvgPath(line.pathPoints, renderTime, line.wiggleVariant));
+              pathParts.push(svgPath);
               const head = headOf(line);
+              const hx = Math.round(head.x);
+              const hy = Math.round(head.y);
+              if (isDragging) {
+                hasDragging = true;
+                // Dragged heads are bigger — use circle path approximation
+                dragOuterCircles.push(`M ${hx - 9} ${hy} a 9 9 0 1 0 18 0 a 9 9 0 1 0 -18 0`);
+                if (dot.id === 'dot-left') {
+                  dragInnerLeft.push(`M ${hx - 4} ${hy} a 4 4 0 1 0 8 0 a 4 4 0 1 0 -8 0`);
+                } else {
+                  dragInnerRight.push(`M ${hx - 4} ${hy} a 4 4 0 1 0 8 0 a 4 4 0 1 0 -8 0`);
+                }
+              } else {
+                outerCircles.push(`M ${hx - 6} ${hy} a 6 6 0 1 0 12 0 a 6 6 0 1 0 -12 0`);
+                if (dot.id === 'dot-left') {
+                  innerCirclesLeft.push(`M ${hx - 2.5} ${hy} a 2.5 2.5 0 1 0 5 0 a 2.5 2.5 0 1 0 -5 0`);
+                } else {
+                  innerCirclesRight.push(`M ${hx - 2.5} ${hy} a 2.5 2.5 0 1 0 5 0 a 2.5 2.5 0 1 0 -5 0`);
+                }
+              }
+            }
 
-              return (
-                <React.Fragment key={line.id}>
-                  <Path
-                    d={svgPath}
-                    stroke={LINE_COLOR}
-                    strokeWidth={6}
-                    fill="none"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <Circle
-                    cx={head.x}
-                    cy={head.y}
-                    r={isDragging ? 9 : 6}
-                    fill={HEAD_COLOR}
-                  />
-                  <Circle
-                    cx={head.x}
-                    cy={head.y}
-                    r={isDragging ? 4 : 2.5}
-                    fill={dot.id === 'dot-left' ? '#ffffff' : '#bbbbbb'}
-                  />
-                </React.Fragment>
-              );
-            }),
-          )}
+            if (pathParts.length === 0) return null;
+            const innerCircles = dot.id === 'dot-left' ? innerCirclesLeft : innerCirclesRight;
+            const dragInner = dot.id === 'dot-left' ? dragInnerLeft : dragInnerRight;
+            const innerColor = dot.id === 'dot-left' ? '#ffffff' : '#bbbbbb';
+
+            return (
+              <React.Fragment key={`${dot.id}-active`}>
+                <Path d={pathParts.join(' ')} stroke={LINE_COLOR} strokeWidth={6} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                {outerCircles.length > 0 && <Path d={outerCircles.join(' ')} fill={HEAD_COLOR} />}
+                {innerCircles.length > 0 && <Path d={innerCircles.join(' ')} fill={innerColor} />}
+                {hasDragging && dragOuterCircles.length > 0 && <Path d={dragOuterCircles.join(' ')} fill={HEAD_COLOR} />}
+                {hasDragging && dragInner.length > 0 && <Path d={dragInner.join(' ')} fill={innerColor} />}
+              </React.Fragment>
+            );
+          })}
 
           {/* Dots — animated with smooth escape bumps */}
           {gs.dots.map((dot: DotState) => {
@@ -683,44 +708,45 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             );
           })}
 
-          {/* Writhing flecks inside each dot — count scales with radius, per-fleck random blink */}
+          {/* Writhing flecks inside each dot — cached, recomputed every 4 render frames */}
           {gs.dots.map((dot: DotState, dotIdx: number) => {
             const r = dot.radius;
             if (r < 18) return null;
-            // More flecks as the dot grows: 1 at r≈18, up to 15 at r≈50+
-            const FLECK_COUNT = Math.min(15, Math.max(1, Math.floor((r - 15) / 2.5)));
-            const fleckParts: string[] = [];
-            for (let i = 0; i < FLECK_COUNT; i++) {
-              const phase = i * 1.618 + dotIdx * 2.4;
-              // Per-fleck pseudorandom blink — halved frequencies for slower rhythm
-              const blinkCycle = Math.sin(renderTime * (0.18 + i * 0.055) + phase * 2.1)
-                               * Math.cos(renderTime * (0.32 + i * 0.085) + phase * 1.3);
-              if (blinkCycle < 0) continue;
-              // Rotation and shape speeds halved for slower writhing motion
-              const rot = renderTime * (0.22 + i * 0.03) + phase;
-              const radFrac = 0.15 + 0.55 * ((Math.sin(phase * 1.3) + 1) / 2);
-              const ox = dot.x + Math.cos(rot) * r * radFrac;
-              const oy = dot.y + Math.sin(rot) * r * radFrac;
-              const len = r * (0.12 + 0.14 * Math.abs(Math.sin(renderTime * 0.65 + phase)));
-              const sweep = rot + 0.9 + Math.sin(renderTime * 0.8 + phase) * 0.6;
-              const ctrl = rot + 0.45 + Math.sin(renderTime * 1.0 + phase) * 0.4;
-              const ex = ox + Math.cos(sweep) * len;
-              const ey = oy + Math.sin(sweep) * len;
-              const qx = ox + Math.cos(ctrl) * len * 0.7;
-              const qy = oy + Math.sin(ctrl) * len * 0.7;
-              fleckParts.push(`M ${Math.round(ox)} ${Math.round(oy)} Q ${Math.round(qx)} ${Math.round(qy)} ${Math.round(ex)} ${Math.round(ey)}`);
+            // Recompute fleck path every 4th frame (~8fps visual update, imperceptible)
+            if (gs.frameCount - dot.cachedFleckFrame >= 4 || !dot.cachedFleckSvg) {
+              dot.cachedFleckFrame = gs.frameCount;
+              const FLECK_COUNT = Math.min(15, Math.max(1, Math.floor((r - 15) / 2.5)));
+              const fleckParts: string[] = [];
+              for (let i = 0; i < FLECK_COUNT; i++) {
+                const phase = i * 1.618 + dotIdx * 2.4;
+                const blinkCycle = Math.sin(renderTime * (0.18 + i * 0.055) + phase * 2.1)
+                                 * Math.cos(renderTime * (0.32 + i * 0.085) + phase * 1.3);
+                if (blinkCycle < 0) continue;
+                const rot = renderTime * (0.22 + i * 0.03) + phase;
+                const radFrac = 0.15 + 0.55 * ((Math.sin(phase * 1.3) + 1) / 2);
+                const ox = dot.x + Math.cos(rot) * r * radFrac;
+                const oy = dot.y + Math.sin(rot) * r * radFrac;
+                const len = r * (0.12 + 0.14 * Math.abs(Math.sin(renderTime * 0.65 + phase)));
+                const sweep = rot + 0.9 + Math.sin(renderTime * 0.8 + phase) * 0.6;
+                const ctrl = rot + 0.45 + Math.sin(renderTime * 1.0 + phase) * 0.4;
+                const ex = ox + Math.cos(sweep) * len;
+                const ey = oy + Math.sin(sweep) * len;
+                const qx = ox + Math.cos(ctrl) * len * 0.7;
+                const qy = oy + Math.sin(ctrl) * len * 0.7;
+                fleckParts.push(`M ${Math.round(ox)} ${Math.round(oy)} Q ${Math.round(qx)} ${Math.round(qy)} ${Math.round(ex)} ${Math.round(ey)}`);
+              }
+              dot.cachedFleckSvg = fleckParts.join(' ');
+              dot.cachedFleckOpacity = 0.15 + 0.35 * ((Math.sin(renderTime * 0.4 + dotIdx * 1.5) + 1) / 2);
             }
-            if (fleckParts.length === 0) return null;
-            // Slower overall opacity pulse
-            const opacity = 0.15 + 0.35 * ((Math.sin(renderTime * 0.4 + dotIdx * 1.5) + 1) / 2);
+            if (!dot.cachedFleckSvg) return null;
             return (
               <Path
                 key={`${dot.id}-flecks`}
-                d={fleckParts.join(' ')}
+                d={dot.cachedFleckSvg}
                 stroke="#777777"
                 strokeWidth={1}
                 fill="none"
-                opacity={opacity}
+                opacity={dot.cachedFleckOpacity}
               />
             );
           })}

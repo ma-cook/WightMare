@@ -12,13 +12,18 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}.${ms}`;
 }
 
-export default function HUD({ survivalTime }: Props) {
+function HUD({ survivalTime }: Props) {
   return (
     <View style={styles.container} pointerEvents="none">
       <Text style={styles.text}>{formatTime(survivalTime)}</Text>
     </View>
   );
 }
+
+export default React.memo(HUD, (prev, next) => {
+  // Only re-render when the displayed string actually changes (tenths of a second)
+  return formatTime(prev.survivalTime) === formatTime(next.survivalTime);
+});
 
 const styles = StyleSheet.create({
   container: {
