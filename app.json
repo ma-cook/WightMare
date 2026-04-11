@@ -2,7 +2,7 @@
   "expo": {
     "name": "WightMare",
     "slug": "wightmare",
-    "version": "1.0.0",
+    "version": "24.0.0",
     "orientation": "landscape",
     "userInterfaceStyle": "light",
     "splash": {
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.macook.wightmare",
-      "versionCode": 3,
+      "versionCode": 18,
       "adaptiveIcon": {
         "foregroundImage": "./assests/image (5).png",
         "backgroundColor": "#ffffff"

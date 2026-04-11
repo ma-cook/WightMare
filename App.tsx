@@ -161,7 +161,7 @@ export default function App() {
               placeholder="Enter gamertag"
               placeholderTextColor="#aaaaaa"
               maxLength={20}
-              autoFocus
+              autoFocus={!playerName}
               onSubmitEditing={handleStartGame}
             />
             <AnimatedDotWrapper width={56} height={56} onPress={handleStartGame}>
@@ -176,6 +176,7 @@ export default function App() {
             <Leaderboard entries={topScores} />
           </View>
         )}
+
         {Platform.OS === 'web' && (
           <Pressable
             style={styles.privacyButton}

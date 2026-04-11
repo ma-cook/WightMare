@@ -26,3 +26,6 @@ wightmare-4fd5e-firebase-adminsdk-*.json
 google-play-service-account.json
 wightmare-4fd5e-ad857070fd4f.json
 
+# Generated native project — contains signing secrets in gradle.properties
+android/
+

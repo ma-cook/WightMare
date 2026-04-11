@@ -70,6 +70,8 @@ export interface DotState {
   unconnectedCount: number;
   /** Pre-allocated buffer for dot circle rendering (avoids per-frame allocation). */
   _dotBuf: Float64Array;
+  /** Temporary flash indicator: 'reward' (connected in time) or 'penalty' (missed). */
+  flash: { type: 'reward' | 'penalty'; startTime: number } | null;
 }
 
 export interface GameState {
@@ -226,6 +228,7 @@ export function createInitialState(width: number, height: number): GameState {
         pendingBatches: [],
         unconnectedCount: 0,
         _dotBuf: new Float64Array(72),
+        flash: null,
       },
       {
         id: 'dot-right',
@@ -250,6 +253,7 @@ export function createInitialState(width: number, height: number): GameState {
         pendingBatches: [],
         unconnectedCount: 0,
         _dotBuf: new Float64Array(72),
+        flash: null,
       },
     ],
   };

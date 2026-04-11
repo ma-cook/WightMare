@@ -228,6 +228,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
               if (partner) {
                 partner.penaltyApplied = true;
                 dot.spawnInterval = Math.max(1000, dot.spawnInterval - SPAWN_INTERVAL_DECREASE);
+                dot.flash = { type: 'penalty', startTime: now };
               }
             }
           }
@@ -469,6 +470,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
                   parentDot.spawnInterval + SPAWN_INTERVAL_INCREASE,
                   SPAWN_INTERVAL_MAX,
                 );
+                parentDot.flash = { type: 'reward', startTime: Date.now() };
               }
             }
             const snapHead = headOf(snapTarget);
@@ -705,6 +707,33 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
                 d={dotPath}
                 fill="#111111"
               />
+            );
+          })}
+
+          {/* Flash indicator at dot center on reward/penalty */}
+          {gs.dots.map((dot: DotState) => {
+            if (!dot.flash) return null;
+            const elapsed = Date.now() - dot.flash.startTime;
+            const duration = dot.flash.type === 'reward' ? 300 : 100;
+            if (elapsed >= duration) {
+              dot.flash = null;
+              return null;
+            }
+            const fr = 5;
+            const cx = Math.round(dot.x);
+            const cy = Math.round(dot.y);
+            const d = `M ${cx - fr} ${cy} a ${fr} ${fr} 0 1 0 ${fr * 2} 0 a ${fr} ${fr} 0 1 0 -${fr * 2} 0`;
+            if (dot.flash.type === 'reward') {
+              return (
+                <React.Fragment key={`${dot.id}-flash`}>
+                  <Path d={d} fill="#ffffff" stroke="#555555" strokeWidth={1.5} />
+                </React.Fragment>
+              );
+            }
+            return (
+              <React.Fragment key={`${dot.id}-flash`}>
+                <Path d={d} fill="#555555" stroke="#ffffff" strokeWidth={1.5} />
+              </React.Fragment>
             );
           })}
 
