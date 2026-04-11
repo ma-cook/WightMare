@@ -18,7 +18,7 @@ import {
   View,
   type NativeTouchEvent,
 } from 'react-native';
-import Svg, { Path, Text as SvgText } from 'react-native-svg';
+import Svg, { Defs, LinearGradient, Stop, Rect, Path, Text as SvgText } from 'react-native-svg';
 
 import {
   CELL_SIZE,
@@ -74,10 +74,11 @@ interface Props {
   width: number;
   height: number;
   playerName: string;
+  personalBest: number | null;
   onReturnToMenu: (survivalTime?: number) => void;
 }
 
-export default function GameCanvas({ width, height, playerName, onReturnToMenu }: Props) {
+export default function GameCanvas({ width, height, playerName, personalBest, onReturnToMenu }: Props) {
   // ── React state: only used to trigger re-renders ──────────────────────────
   const [renderTick, setRenderTick] = useState(0);
   const triggerRender = useCallback(() => setRenderTick((t) => t + 1), []);
@@ -601,6 +602,11 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
   // Build dragged-line ID set once per render for O(1) lookups
   const renderDraggedIds = new Set(gs.draggingMap.values());
 
+  // Determine which side gets the warm tone based on which dot is larger
+  const leftDot = gs.dots[0];
+  const rightDot = gs.dots[1];
+  const leftLarger = leftDot && rightDot ? leftDot.targetRadius >= rightDot.targetRadius : true;
+
   return (
     <View style={styles.container}>
       {/* Touch / mouse capture layer */}
@@ -613,6 +619,14 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
         onTouchCancel={(e) => processTouches(Array.from(e.nativeEvent.changedTouches || [e.nativeEvent]), 'end')}
       >
         <Svg width={width} height={height} style={styles.svg}>
+          {/* Dynamic gradient — warm side follows the larger dot */}
+          <Defs>
+            <LinearGradient id="bg-grad" x1="0" y1="0" x2="1" y2="0">
+              <Stop offset="0" stopColor={leftLarger ? '#F5F0EB' : '#FFFFFF'} />
+              <Stop offset="1" stopColor={leftLarger ? '#FFFFFF' : '#F5F0EB'} />
+            </LinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width={width} height={height} fill="url(#bg-grad)" />
           {/* Connected lines — one single <Path> per dot for all connected lines */}
           {gs.dots.map((dot: DotState) => {
             // Lazily rebuild the joined SVG string when new paths were added
@@ -874,6 +888,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
         <GameOverScreen
           survivalTime={gs.survivalTime}
           playerName={playerName}
+          isNewBest={personalBest === null || gs.survivalTime > personalBest}
           onPlayAgain={handlePlayAgain}
           onReturnToMenu={() => onReturnToMenu(gs.survivalTime)}
           totalConnected={gs.totalConnected}

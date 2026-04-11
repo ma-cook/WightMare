@@ -19,7 +19,7 @@ import GameCanvas from './components/GameCanvas';
 import Leaderboard from './components/Leaderboard';
 import SquigglyTitle, { SquigglyText, AnimatedDotWrapper } from './components/SquigglyTitle';
 import { fetchTopScores, type LeaderboardEntry } from './services/leaderboard';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
 
 const STORAGE_KEY = 'wightmare_gamertag';
 const PB_STORAGE_KEY = 'wightmare_personal_best';
@@ -146,71 +146,91 @@ export default function App() {
     return (
       <View style={styles.menu}>
         <StatusBar hidden />
-        <View style={styles.titleWrap}>
-          <SquigglyTitle maxWidth={400} wobble={!introAnimDone} />
-        </View>
-        {screen === 'menu' ? (
-          <>
-            <Pressable style={styles.playBar} onPress={handlePlay}>
-              <SquigglyText text="Play" maxWidth={120} letterHeight={36} delay={0} animDuration={500} color="#ffffff" wobble={!introAnimDone} />
-            </Pressable>
-            {playerName ? (
-              <Pressable onPress={() => setScreen('nameEntry')}>
-                <Text style={styles.changeNameText}>Change name</Text>
-              </Pressable>
-            ) : null}
-            <View style={styles.taglineWrap}>
-              <SquigglyText
-                text="Connect the lines - Survive!"
-                maxWidth={380}
-                letterHeight={44}
-                animDuration={0}
-                letterStagger={0}
-                strokeWidth={1.5}
-                color="#555555"
-                wobble={false}
-              />
+        {/* Gradient background */}
+        <Svg width={dimensions.width} height={dimensions.height} style={StyleSheet.absoluteFill} pointerEvents="none">
+          <Defs>
+            <LinearGradient id="menu-bg" x1="0" y1="0" x2="1" y2="0">
+              <Stop offset="0" stopColor="#FFFFFF" />
+              <Stop offset="1" stopColor="#F5F0EB" />
+            </LinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width={dimensions.width} height={dimensions.height} fill="url(#menu-bg)" />
+        </Svg>
+
+        {/* 3-column landscape layout */}
+        <View style={styles.menuColumns}>
+          {/* Left column — Leaderboard */}
+          <View style={styles.menuLeft}>
+            {topScores.length > 0 && <Leaderboard entries={topScores} />}
+          </View>
+
+          {/* Center column — Main content */}
+          <View style={styles.menuCenter}>
+            <View style={styles.titleWrap}>
+              <SquigglyTitle maxWidth={400} wobble={!introAnimDone} />
             </View>
-            {personalBest !== null ? (
-              <View style={styles.pbWrap}>
-                <Text style={styles.pbText}>
-                  Personal Best: {Math.floor(personalBest / 60)}:{Math.floor(personalBest % 60).toString().padStart(2, '0')}
-                </Text>
-                {(() => {
-                  const rank = topScores.findIndex(s => personalBest >= s.time) + 1;
-                  return rank > 0 && rank <= 10 ? (
-                    <Text style={styles.rankText}>Rank #{rank}</Text>
-                  ) : null;
-                })()}
-              </View>
+            {screen === 'menu' ? (
+              <>
+                <AnimatedDotWrapper width={160} height={56} onPress={handlePlay}>
+                  <SquigglyText text="Play" maxWidth={100} letterHeight={30} delay={0} animDuration={500} color="#ffffff" wobble={!introAnimDone} />
+                </AnimatedDotWrapper>
+                {playerName ? (
+                  <Pressable onPress={() => setScreen('nameEntry')}>
+                    <Text style={styles.changeNameText}>Change name</Text>
+                  </Pressable>
+                ) : null}
+                <View style={styles.taglineWrap}>
+                  <SquigglyText
+                    text="Connect the lines - Survive!"
+                    maxWidth={380}
+                    letterHeight={44}
+                    animDuration={0}
+                    letterStagger={0}
+                    strokeWidth={1.5}
+                    color="#555555"
+                    wobble={false}
+                  />
+                </View>
+                {personalBest !== null ? (
+                  <View style={styles.pbWrap}>
+                    <Text style={styles.pbText}>
+                      Personal Best: {Math.floor(personalBest / 60)}:{Math.floor(personalBest % 60).toString().padStart(2, '0')}
+                    </Text>
+                    {(() => {
+                      const rank = topScores.findIndex(s => personalBest >= s.time) + 1;
+                      return rank > 0 && rank <= 10 ? (
+                        <Text style={styles.rankText}>Rank #{rank}</Text>
+                      ) : null;
+                    })()}
+                  </View>
+                ) : (
+                  <Text style={styles.pbTextEmpty}>No runs yet</Text>
+                )}
+              </>
             ) : (
-              <Text style={styles.pbText}>No runs yet</Text>
+              <View style={styles.nameRow}>
+                <TextInput
+                  style={styles.nameInput}
+                  value={nameInput}
+                  onChangeText={setNameInput}
+                  placeholder="Enter gamertag"
+                  placeholderTextColor="#aaaaaa"
+                  maxLength={20}
+                  autoFocus={!playerName}
+                  onSubmitEditing={handleStartGame}
+                />
+                <AnimatedDotWrapper width={56} height={56} onPress={handleStartGame}>
+                  <Svg width={24} height={24} viewBox="0 0 24 24">
+                    <Path d="M10 6l6 6-6 6" stroke="#fff" strokeWidth={3} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  </Svg>
+                </AnimatedDotWrapper>
+              </View>
             )}
-          </>
-        ) : (
-          <View style={styles.nameRow}>
-            <TextInput
-              style={styles.nameInput}
-              value={nameInput}
-              onChangeText={setNameInput}
-              placeholder="Enter gamertag"
-              placeholderTextColor="#aaaaaa"
-              maxLength={20}
-              autoFocus={!playerName}
-              onSubmitEditing={handleStartGame}
-            />
-            <AnimatedDotWrapper width={56} height={56} onPress={handleStartGame}>
-              <Svg width={24} height={24} viewBox="0 0 24 24">
-                <Path d="M10 6l6 6-6 6" stroke="#111" strokeWidth={3} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              </Svg>
-            </AnimatedDotWrapper>
           </View>
-        )}
-        {topScores.length > 0 && (
-          <View style={styles.leaderboardMenuWrap}>
-            <Leaderboard entries={topScores} />
-          </View>
-        )}
+
+          {/* Right column — empty for balance */}
+          <View style={styles.menuRight} />
+        </View>
 
         {Platform.OS === 'web' && (
           <Pressable
@@ -230,6 +250,7 @@ export default function App() {
         width={dimensions.width}
         height={dimensions.height}
         playerName={playerName}
+        personalBest={personalBest}
         onReturnToMenu={handleGameOver}
       />
     </View>
@@ -251,15 +272,31 @@ const styles = StyleSheet.create({
   menu: {
     flex: 1,
     backgroundColor: '#ffffff',
+  },
+  menuColumns: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  menuLeft: {
+    width: '25%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingLeft: 20,
+  },
+  menuCenter: {
+    width: '50%',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  menuRight: {
+    width: '25%',
+  },
   titleWrap: {
-    marginBottom: 20,
-    marginTop: -40,
+    marginBottom: 16,
   },
   taglineWrap: {
-    marginTop: 20,
+    marginTop: 16,
   },
   changeNameText: {
     fontSize: 12,
@@ -270,29 +307,28 @@ const styles = StyleSheet.create({
   },
   pbWrap: {
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: 10,
   },
   pbText: {
-    fontSize: 14,
+    fontSize: 18,
     color: '#8B0000',
     fontFamily: 'serif',
     fontStyle: 'italic',
     fontWeight: '700',
-    marginTop: 8,
+  },
+  pbTextEmpty: {
+    fontSize: 14,
+    color: '#888888',
+    fontFamily: 'serif',
+    fontStyle: 'italic',
+    marginTop: 10,
   },
   rankText: {
-    fontSize: 12,
+    fontSize: 13,
     color: '#8B0000',
     fontFamily: 'serif',
     fontStyle: 'italic',
     marginTop: 2,
-  },
-  playBar: {
-    width: '20%',
-    backgroundColor: '#111111',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
   },
   nameRow: {
     flexDirection: 'row',
@@ -300,7 +336,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   nameInput: {
-    backgroundColor: '#ffffff',
+    backgroundColor: 'rgba(255,255,255,0.8)',
     color: '#111111',
     fontSize: 20,
     fontWeight: '700',
@@ -308,17 +344,8 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderWidth: 2,
     borderColor: '#111111',
-    borderRadius: 0,
+    borderRadius: 24,
     width: 240,
-  },
-  leaderboardMenuWrap: {
-    position: 'absolute',
-    left: 20,
-    top: 0,
-    bottom: 0,
-    width: '25%',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   privacyButton: {
     position: 'absolute',

@@ -117,13 +117,13 @@ export const SPAWN_INTERVAL_MIN = 3000;
 /** Initial spawn interval maximum (ms). */
 export const SPAWN_INTERVAL_MAX = 8000;
 /** Hard floor for spawn interval (ms). */
-export const MIN_SPAWN_INTERVAL = 1000;
+export const MIN_SPAWN_INTERVAL = 1500;
 /** How much the spawn interval shrinks after a missed connection (ms). */
 export const SPAWN_INTERVAL_DECREASE = 500;
 /** How long the player has to connect before a speed penalty applies (ms). */
-export const CONNECT_PENALTY_WINDOW = 500;
+export const CONNECT_PENALTY_WINDOW = 800;
 /** If connected within this window, spawn interval is slowed down (ms). */
-export const CONNECT_REWARD_WINDOW = 500;
+export const CONNECT_REWARD_WINDOW = 800;
 /** How much the spawn interval grows after a quick connection (ms). */
 export const SPAWN_INTERVAL_INCREASE = 500;
 /** After this many ms, an unconnected line escapes its explore zone (ms). */
@@ -136,7 +136,7 @@ export const DOT_GROW_DURATION = 3000;
 export const LARGER_DOT_SPAWN_BOOST = 500;
 
 /** Head movement speed in px/s. */
-export const LINE_SPEED = 40;
+export const LINE_SPEED = 35;
 /** Max angular change per second (radians). Higher = wigglier. */
 export const DIRECTION_WOBBLE = 2.5;
 /** Touch / click hit radius for grabbing a head (px). */
