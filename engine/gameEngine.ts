@@ -72,6 +72,14 @@ export interface DotState {
   _dotBuf: Float64Array;
   /** Temporary flash indicator: 'reward' (connected in time) or 'penalty' (missed). */
   flash: { type: 'reward' | 'penalty'; startTime: number } | null;
+  /** Connection pulse flashes — bright flash along connected paths. */
+  connectionFlashes: Array<{ svgPath: string; startTime: number }>;
+  /** Timestamp of last spawn pulse (for dot scale bump animation). */
+  lastSpawnPulseTime: number;
+  /** Current combo streak on this dot (reset on penalty). */
+  combo: number;
+  /** Best combo achieved on this dot during this game. */
+  bestCombo: number;
 }
 
 export interface GameState {
@@ -90,6 +98,16 @@ export interface GameState {
   lineMap: Map<string, SquigglyLine>;
   /** Frame counter — used for render throttling. */
   frameCount: number;
+  /** Longest combo streak across all dots this game. */
+  longestCombo: number;
+  /** Closest a line head has been to an edge (px) this game. */
+  closestEdgeCall: number;
+  /** Sum of connection times (ms) for averaging. */
+  totalConnectionTime: number;
+  /** Number of successful connections. */
+  connectionCount: number;
+  /** Map of lineId → timestamp when drag started (for expanding head). */
+  dragStartTime: Map<string, number>;
 }
 
 // ─── Tunable constants ───────────────────────────────────────────────────────
@@ -97,17 +115,17 @@ export interface GameState {
 /** Initial spawn interval minimum (ms). */
 export const SPAWN_INTERVAL_MIN = 3000;
 /** Initial spawn interval maximum (ms). */
-export const SPAWN_INTERVAL_MAX = 5000;
+export const SPAWN_INTERVAL_MAX = 8000;
 /** Hard floor for spawn interval (ms). */
 export const MIN_SPAWN_INTERVAL = 1000;
 /** How much the spawn interval shrinks after a missed connection (ms). */
 export const SPAWN_INTERVAL_DECREASE = 500;
 /** How long the player has to connect before a speed penalty applies (ms). */
-export const CONNECT_PENALTY_WINDOW = 300;
+export const CONNECT_PENALTY_WINDOW = 500;
 /** If connected within this window, spawn interval is slowed down (ms). */
 export const CONNECT_REWARD_WINDOW = 500;
 /** How much the spawn interval grows after a quick connection (ms). */
-export const SPAWN_INTERVAL_INCREASE = 300;
+export const SPAWN_INTERVAL_INCREASE = 500;
 /** After this many ms, an unconnected line escapes its explore zone (ms). */
 export const ESCAPE_TIME = 5000;
 /** Max unconnected lines per dot. */
@@ -229,6 +247,10 @@ export function createInitialState(width: number, height: number): GameState {
         unconnectedCount: 0,
         _dotBuf: new Float64Array(72),
         flash: null,
+        connectionFlashes: [],
+        lastSpawnPulseTime: 0,
+        combo: 0,
+        bestCombo: 0,
       },
       {
         id: 'dot-right',
@@ -254,7 +276,16 @@ export function createInitialState(width: number, height: number): GameState {
         unconnectedCount: 0,
         _dotBuf: new Float64Array(72),
         flash: null,
+        connectionFlashes: [],
+        lastSpawnPulseTime: 0,
+        combo: 0,
+        bestCombo: 0,
       },
     ],
+    longestCombo: 0,
+    closestEdgeCall: Infinity,
+    totalConnectionTime: 0,
+    connectionCount: 0,
+    dragStartTime: new Map(),
   };
 }

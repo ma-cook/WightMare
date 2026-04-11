@@ -10,6 +10,10 @@ interface Props {
   playerName: string;
   onPlayAgain: () => void;
   onReturnToMenu: () => void;
+  totalConnected: number;
+  longestCombo: number;
+  closestEdgeCall: number;
+  averageConnectionTime: number;
 }
 
 function formatTime(seconds: number): string {
@@ -18,7 +22,7 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export default function GameOverScreen({ survivalTime, playerName, onPlayAgain, onReturnToMenu }: Props) {
+export default function GameOverScreen({ survivalTime, playerName, onPlayAgain, onReturnToMenu, totalConnected, longestCombo, closestEdgeCall, averageConnectionTime }: Props) {
   const [topScores, setTopScores] = useState<LeaderboardEntry[]>([]);
   const [submitted, setSubmitted] = useState(false);
 
@@ -50,6 +54,12 @@ export default function GameOverScreen({ survivalTime, playerName, onPlayAgain, 
           <TouchableOpacity style={styles.menuButton} onPress={onReturnToMenu}>
             <Text style={styles.menuButtonText}>Menu</Text>
           </TouchableOpacity>
+        </View>
+        <View style={styles.statsRow}>
+          <Text style={styles.statText}>Connections: {totalConnected}</Text>
+          <Text style={styles.statText}>Best Combo: x{longestCombo}</Text>
+          <Text style={styles.statText}>Closest Call: {closestEdgeCall}px</Text>
+          <Text style={styles.statText}>Avg Connect: {averageConnectionTime.toFixed(1)}s</Text>
         </View>
       </View>
       {topScores.length > 0 && (
@@ -123,5 +133,19 @@ const styles = StyleSheet.create({
     width: '30%',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  statsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 12,
+    marginTop: 16,
+    maxWidth: 360,
+  },
+  statText: {
+    fontSize: 11,
+    color: '#888888',
+    fontFamily: 'serif',
+    fontStyle: 'italic',
   },
 });

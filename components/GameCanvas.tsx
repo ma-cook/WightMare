@@ -18,7 +18,7 @@ import {
   View,
   type NativeTouchEvent,
 } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Path, Text as SvgText } from 'react-native-svg';
 
 import {
   CELL_SIZE,
@@ -74,7 +74,7 @@ interface Props {
   width: number;
   height: number;
   playerName: string;
-  onReturnToMenu: () => void;
+  onReturnToMenu: (survivalTime?: number) => void;
 }
 
 export default function GameCanvas({ width, height, playerName, onReturnToMenu }: Props) {
@@ -180,6 +180,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
         const effectiveInterval = Math.max(1000, dot.spawnInterval - spawnBoost);
         if (now - dot.lastSpawnTime >= effectiveInterval) {
           dot.lastSpawnTime = now;
+          dot.lastSpawnPulseTime = now;
           // Randomise next interval
           dot.spawnInterval =
             SPAWN_INTERVAL_MIN +
@@ -217,11 +218,11 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
           if (!line.connectedToId && !line.penaltyApplied) {
             if (now - line.spawnTime > CONNECT_PENALTY_WINDOW) {
               line.penaltyApplied = true;
-              // Find a partner from the same spawn event still unconnected
+              // Find a partner from the same spawn batch still unconnected
               const partner = dot.lines.find(
                 (l) =>
                   l.id !== line.id &&
-                  l.spawnTime === line.spawnTime &&
+                  Math.abs(l.spawnTime - line.spawnTime) < 200 &&
                   !l.connectedToId &&
                   !l.penaltyApplied,
               );
@@ -229,6 +230,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
                 partner.penaltyApplied = true;
                 dot.spawnInterval = Math.max(1000, dot.spawnInterval - SPAWN_INTERVAL_DECREASE);
                 dot.flash = { type: 'penalty', startTime: now };
+                dot.combo = 0;
               }
             }
           }
@@ -330,6 +332,9 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
           }
 
           // ── Edge-collision → game over ───────────────────────────────────
+          // Track closest edge call
+          const edgeDist = Math.min(newHead.x, newHead.y, width - newHead.x, height - newHead.y);
+          if (edgeDist < gs.closestEdgeCall) gs.closestEdgeCall = edgeDist;
           if (
             newHead.x <= EDGE_MARGIN ||
             newHead.y <= EDGE_MARGIN ||
@@ -408,6 +413,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             }
             if (!alreadyGrabbed) {
               gs.draggingMap.set(id, target.id);
+              gs.dragStartTime.set(target.id, Date.now());
             }
           }
           continue;
@@ -471,7 +477,21 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
                   SPAWN_INTERVAL_MAX,
                 );
                 parentDot.flash = { type: 'reward', startTime: Date.now() };
+                // Combo tracking
+                parentDot.combo++;
+                parentDot.bestCombo = Math.max(parentDot.bestCombo, parentDot.combo);
+                gs.longestCombo = Math.max(gs.longestCombo, parentDot.combo);
+                // Combo bonus at thresholds 3/5/10
+                if (parentDot.combo === 3 || parentDot.combo === 5 || parentDot.combo === 10) {
+                  parentDot.spawnInterval = Math.min(
+                    parentDot.spawnInterval + SPAWN_INTERVAL_INCREASE,
+                    SPAWN_INTERVAL_MAX,
+                  );
+                }
               }
+              // Track connection stats
+              gs.totalConnectionTime += (Date.now() - draggedLine.spawnTime);
+              gs.connectionCount++;
             }
             const snapHead = headOf(snapTarget);
             draggedLine.pathPoints[draggedLine.pathPoints.length - 1] = {
@@ -485,6 +505,12 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             if (parentDot) {
               parentDot.connectedPaths.push(draggedLine.cachedSvgPath, snapTarget.cachedSvgPath);
               parentDot.connectedSvgDirty = true;
+              // Push connection pulse flashes for both paths
+              const pulseNow = Date.now();
+              parentDot.connectionFlashes.push(
+                { svgPath: draggedLine.cachedSvgPath, startTime: pulseNow },
+                { svgPath: snapTarget.cachedSvgPath, startTime: pulseNow },
+              );
               // Remove connected lines from dot.lines to stop iterating them each frame
               parentDot.lines = parentDot.lines.filter(
                 (l) => l.id !== draggedLine.id && l.id !== snapTarget.id,
@@ -505,6 +531,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
         }
 
         gs.draggingMap.delete(id);
+        if (lineId) gs.dragStartTime.delete(lineId);
       }
     },
     [],
@@ -605,9 +632,27 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
               />
             ) : null;
           })}
+          {/* Connection pulse flashes — bright flash along connected paths */}
+          {gs.dots.map((dot: DotState) => {
+            const pulseNow = Date.now();
+            dot.connectionFlashes = dot.connectionFlashes.filter(f => pulseNow - f.startTime < 200);
+            return dot.connectionFlashes.length > 0 ? (
+              <Path
+                key={`${dot.id}-pulse`}
+                d={dot.connectionFlashes.map(f => f.svgPath).join(' ')}
+                stroke="#888888"
+                strokeWidth={8}
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity={Math.max(0, 1 - (pulseNow - dot.connectionFlashes[0].startTime) / 200)}
+              />
+            ) : null;
+          })}
           {/* Active (unconnected) lines — batched into merged <Path> per dot */}
           {gs.dots.map((dot: DotState) => {
             const pathParts: string[] = [];
+            const closeCallPaths: string[] = [];
             const outerCircles: string[] = [];
             const innerCirclesLeft: string[] = [];
             const innerCirclesRight: string[] = [];
@@ -621,18 +666,29 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
               const isDragging = renderDraggedIds.has(line.id);
               const svgPath = line.cachedWiggleSvg
                 || (line.cachedWiggleSvg = pointsToWiggledSvgPath(line.pathPoints, renderTime, line.wiggleVariant));
-              pathParts.push(svgPath);
+              // Close-call: head within 20px of any edge → red
               const head = headOf(line);
+              const isCloseCall = !isDragging && (head.x < 20 || head.y < 20 || head.x > width - 20 || head.y > height - 20);
+              if (isCloseCall) {
+                closeCallPaths.push(svgPath);
+              } else {
+                pathParts.push(svgPath);
+              }
               const hx = Math.round(head.x);
               const hy = Math.round(head.y);
               if (isDragging) {
                 hasDragging = true;
-                // Dragged heads are bigger — use circle path approximation
-                dragOuterCircles.push(`M ${hx - 9} ${hy} a 9 9 0 1 0 18 0 a 9 9 0 1 0 -18 0`);
+                // Expanding head: grows over time while held (caps at 3s / 8x)
+                const dragStart = gs.dragStartTime.get(line.id) || Date.now();
+                const heldSec = Math.min((Date.now() - dragStart) / 1000, 3);
+                const sizeMult = Math.pow(2, heldSec);
+                const outerR = Math.round(9 * sizeMult * 10) / 10;
+                const innerR = Math.round(4 * sizeMult * 10) / 10;
+                dragOuterCircles.push(`M ${hx - outerR} ${hy} a ${outerR} ${outerR} 0 1 0 ${outerR * 2} 0 a ${outerR} ${outerR} 0 1 0 -${outerR * 2} 0`);
                 if (dot.id === 'dot-left') {
-                  dragInnerLeft.push(`M ${hx - 4} ${hy} a 4 4 0 1 0 8 0 a 4 4 0 1 0 -8 0`);
+                  dragInnerLeft.push(`M ${hx - innerR} ${hy} a ${innerR} ${innerR} 0 1 0 ${innerR * 2} 0 a ${innerR} ${innerR} 0 1 0 -${innerR * 2} 0`);
                 } else {
-                  dragInnerRight.push(`M ${hx - 4} ${hy} a 4 4 0 1 0 8 0 a 4 4 0 1 0 -8 0`);
+                  dragInnerRight.push(`M ${hx - innerR} ${hy} a ${innerR} ${innerR} 0 1 0 ${innerR * 2} 0 a ${innerR} ${innerR} 0 1 0 -${innerR * 2} 0`);
                 }
               } else {
                 outerCircles.push(`M ${hx - 6} ${hy} a 6 6 0 1 0 12 0 a 6 6 0 1 0 -12 0`);
@@ -644,14 +700,15 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
               }
             }
 
-            if (pathParts.length === 0) return null;
+            if (pathParts.length === 0 && closeCallPaths.length === 0) return null;
             const innerCircles = dot.id === 'dot-left' ? innerCirclesLeft : innerCirclesRight;
             const dragInner = dot.id === 'dot-left' ? dragInnerLeft : dragInnerRight;
             const innerColor = dot.id === 'dot-left' ? '#ffffff' : '#bbbbbb';
 
             return (
               <React.Fragment key={`${dot.id}-active`}>
-                <Path d={pathParts.join(' ')} stroke={LINE_COLOR} strokeWidth={6} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                {pathParts.length > 0 && <Path d={pathParts.join(' ')} stroke={LINE_COLOR} strokeWidth={6} fill="none" strokeLinecap="round" strokeLinejoin="round" />}
+                {closeCallPaths.length > 0 && <Path d={closeCallPaths.join(' ')} stroke="#CC0000" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />}
                 {outerCircles.length > 0 && <Path d={outerCircles.join(' ')} fill={HEAD_COLOR} />}
                 {innerCircles.length > 0 && <Path d={innerCircles.join(' ')} fill={innerColor} />}
                 {hasDragging && dragOuterCircles.length > 0 && <Path d={dragOuterCircles.join(' ')} fill={HEAD_COLOR} />}
@@ -662,7 +719,12 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
 
           {/* Dots — animated with smooth escape bumps */}
           {gs.dots.map((dot: DotState) => {
-            const r = dot.radius;
+            let r = dot.radius;
+            // Spawn pulse: 8% scale bump decaying over 300ms
+            const pulseElapsed = Date.now() - dot.lastSpawnPulseTime;
+            if (pulseElapsed < 300 && dot.lastSpawnPulseTime > 0) {
+              r *= 1 + 0.08 * (1 - pulseElapsed / 300);
+            }
             const BUMPS = 8;
             const BUMP_AMP = r * 0.08;
             const BUMP_SPEED = 3.0;
@@ -710,7 +772,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             );
           })}
 
-          {/* Flash indicator at dot center on reward/penalty */}
+          {/* Flash indicator at dot center on reward/penalty (fades out) */}
           {gs.dots.map((dot: DotState) => {
             if (!dot.flash) return null;
             const elapsed = Date.now() - dot.flash.startTime;
@@ -719,6 +781,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
               dot.flash = null;
               return null;
             }
+            const opacity = 1 - elapsed / duration;
             const fr = 5;
             const cx = Math.round(dot.x);
             const cy = Math.round(dot.y);
@@ -726,14 +789,33 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
             if (dot.flash.type === 'reward') {
               return (
                 <React.Fragment key={`${dot.id}-flash`}>
-                  <Path d={d} fill="#ffffff" stroke="#555555" strokeWidth={1.5} />
+                  <Path d={d} fill="#ffffff" stroke="#555555" strokeWidth={1.5} opacity={opacity} />
                 </React.Fragment>
               );
             }
             return (
               <React.Fragment key={`${dot.id}-flash`}>
-                <Path d={d} fill="#555555" stroke="#ffffff" strokeWidth={1.5} />
+                <Path d={d} fill="#555555" stroke="#ffffff" strokeWidth={1.5} opacity={opacity} />
               </React.Fragment>
+            );
+          })}
+
+          {/* Combo counter above each dot */}
+          {gs.dots.map((dot: DotState) => {
+            if (dot.combo <= 0) return null;
+            return (
+              <SvgText
+                key={`${dot.id}-combo`}
+                x={dot.x}
+                y={dot.y - dot.radius - 10}
+                textAnchor="middle"
+                fontSize={14}
+                fontWeight="900"
+                fontFamily="serif"
+                fill="#8B0000"
+              >
+                x{dot.combo}
+              </SvgText>
             );
           })}
 
@@ -793,7 +875,11 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
           survivalTime={gs.survivalTime}
           playerName={playerName}
           onPlayAgain={handlePlayAgain}
-          onReturnToMenu={onReturnToMenu}
+          onReturnToMenu={() => onReturnToMenu(gs.survivalTime)}
+          totalConnected={gs.totalConnected}
+          longestCombo={gs.longestCombo}
+          closestEdgeCall={gs.closestEdgeCall === Infinity ? 0 : Math.round(gs.closestEdgeCall)}
+          averageConnectionTime={gs.connectionCount > 0 ? gs.totalConnectionTime / gs.connectionCount / 1000 : 0}
         />
       )}
     </View>

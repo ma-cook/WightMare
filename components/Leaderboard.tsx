@@ -15,7 +15,7 @@ function MobileIcon() {
     <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
       <Path
         d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm5 18h.01"
-        stroke="#FF0000"
+        stroke="#000000"
         strokeWidth={2}
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -30,7 +30,7 @@ function DesktopIcon() {
     <Svg width={16} height={16} viewBox="0 0 24 24" fill="none">
       <Path
         d="M2 4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4zm6 18h8m-4-4v4"
-        stroke="#FF0000"
+        stroke="#000000"
         strokeWidth={2}
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -81,8 +81,8 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'web' ? 'Georgia, "Times New Roman", serif' : 'serif',
     fontStyle: 'normal',
     fontWeight: '700',
-    fontSize: 16,
-    color: '#FF0000',
+    fontSize: 14,
+    color: '#000000',
     letterSpacing: 1,
   },
   column: {
@@ -93,8 +93,8 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'web' ? 'Georgia, "Times New Roman", serif' : 'serif',
     fontStyle: 'normal',
     fontWeight: '700',
-    fontSize: 14,
-    color: '#FF0000',
+    fontSize: 12,
+    color: '#000000',
     letterSpacing: 1,
   },
 });

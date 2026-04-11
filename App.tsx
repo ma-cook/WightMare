@@ -22,6 +22,7 @@ import { fetchTopScores, type LeaderboardEntry } from './services/leaderboard';
 import Svg, { Path } from 'react-native-svg';
 
 const STORAGE_KEY = 'wightmare_gamertag';
+const PB_STORAGE_KEY = 'wightmare_personal_best';
 
 export default function App() {
   const [ready, setReady] = useState(Platform.OS === 'web');
@@ -29,6 +30,7 @@ export default function App() {
   const [playerName, setPlayerName] = useState('');
   const [nameInput, setNameInput] = useState('');
   const [topScores, setTopScores] = useState<LeaderboardEntry[]>([]);
+  const [personalBest, setPersonalBest] = useState<number | null>(null);
   const [dimensions, setDimensions] = useState(() => {
     const { width, height } = Dimensions.get('window');
     return {
@@ -37,13 +39,16 @@ export default function App() {
     };
   });
 
-  // Load cached gamertag
+  // Load cached gamertag and personal best
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then((val) => {
       if (val) {
         setPlayerName(val);
         setNameInput(val);
       }
+    });
+    AsyncStorage.getItem(PB_STORAGE_KEY).then((val) => {
+      if (val) setPersonalBest(parseFloat(val));
     });
   }, []);
 
@@ -96,7 +101,13 @@ export default function App() {
     return () => sub.remove();
   }, []);
 
-  const handlePlay = useCallback(() => setScreen('nameEntry'), []);
+  const handlePlay = useCallback(() => {
+    if (playerName) {
+      setScreen('game');
+    } else {
+      setScreen('nameEntry');
+    }
+  }, [playerName]);
 
   const handleStartGame = useCallback(() => {
     const trimmed = nameInput.trim().slice(0, 20);
@@ -106,9 +117,13 @@ export default function App() {
     setScreen('game');
   }, [nameInput]);
 
-  const handleGameOver = useCallback(() => {
+  const handleGameOver = useCallback((survivalTime?: number) => {
+    if (survivalTime !== undefined && (personalBest === null || survivalTime > personalBest)) {
+      setPersonalBest(survivalTime);
+      AsyncStorage.setItem(PB_STORAGE_KEY, String(survivalTime));
+    }
     setScreen('menu');
-  }, []);
+  }, [personalBest]);
 
   const [introAnimDone, setIntroAnimDone] = useState(false);
 
@@ -139,6 +154,11 @@ export default function App() {
             <Pressable style={styles.playBar} onPress={handlePlay}>
               <SquigglyText text="Play" maxWidth={120} letterHeight={36} delay={0} animDuration={500} color="#ffffff" wobble={!introAnimDone} />
             </Pressable>
+            {playerName ? (
+              <Pressable onPress={() => setScreen('nameEntry')}>
+                <Text style={styles.changeNameText}>Change name</Text>
+              </Pressable>
+            ) : null}
             <View style={styles.taglineWrap}>
               <SquigglyText
                 text="Connect the lines - Survive!"
@@ -151,6 +171,21 @@ export default function App() {
                 wobble={false}
               />
             </View>
+            {personalBest !== null ? (
+              <View style={styles.pbWrap}>
+                <Text style={styles.pbText}>
+                  Personal Best: {Math.floor(personalBest / 60)}:{Math.floor(personalBest % 60).toString().padStart(2, '0')}
+                </Text>
+                {(() => {
+                  const rank = topScores.findIndex(s => personalBest >= s.time) + 1;
+                  return rank > 0 && rank <= 10 ? (
+                    <Text style={styles.rankText}>Rank #{rank}</Text>
+                  ) : null;
+                })()}
+              </View>
+            ) : (
+              <Text style={styles.pbText}>No runs yet</Text>
+            )}
           </>
         ) : (
           <View style={styles.nameRow}>
@@ -225,6 +260,32 @@ const styles = StyleSheet.create({
   },
   taglineWrap: {
     marginTop: 20,
+  },
+  changeNameText: {
+    fontSize: 12,
+    color: '#888888',
+    fontFamily: 'serif',
+    fontStyle: 'italic',
+    marginTop: 6,
+  },
+  pbWrap: {
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  pbText: {
+    fontSize: 14,
+    color: '#8B0000',
+    fontFamily: 'serif',
+    fontStyle: 'italic',
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  rankText: {
+    fontSize: 12,
+    color: '#8B0000',
+    fontFamily: 'serif',
+    fontStyle: 'italic',
+    marginTop: 2,
   },
   playBar: {
     width: '20%',
