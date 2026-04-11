@@ -105,7 +105,7 @@ export const SPAWN_INTERVAL_DECREASE = 500;
 /** How long the player has to connect before a speed penalty applies (ms). */
 export const CONNECT_PENALTY_WINDOW = 300;
 /** If connected within this window, spawn interval is slowed down (ms). */
-export const CONNECT_REWARD_WINDOW = 300;
+export const CONNECT_REWARD_WINDOW = 500;
 /** How much the spawn interval grows after a quick connection (ms). */
 export const SPAWN_INTERVAL_INCREASE = 300;
 /** After this many ms, an unconnected line escapes its explore zone (ms). */

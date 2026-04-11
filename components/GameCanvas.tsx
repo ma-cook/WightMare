@@ -714,7 +714,7 @@ export default function GameCanvas({ width, height, playerName, onReturnToMenu }
           {gs.dots.map((dot: DotState) => {
             if (!dot.flash) return null;
             const elapsed = Date.now() - dot.flash.startTime;
-            const duration = dot.flash.type === 'reward' ? 300 : 100;
+            const duration = dot.flash.type === 'reward' ? 500 : 250;
             if (elapsed >= duration) {
               dot.flash = null;
               return null;
