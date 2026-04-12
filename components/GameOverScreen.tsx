@@ -72,8 +72,8 @@ export default function GameOverScreen({ survivalTime, playerName, isNewBest, on
       <Svg width={w} height={h} style={StyleSheet.absoluteFill} pointerEvents="none">
         <Defs>
           <LinearGradient id="go-bg" x1="0" y1="0" x2="1" y2="0">
-            <Stop offset="0" stopColor="#FFFFFF" />
-            <Stop offset="1" stopColor="#F5F0EB" />
+            <Stop offset="0" stopColor="#EDE5DA" />
+            <Stop offset="1" stopColor="#FFFFFF" />
           </LinearGradient>
         </Defs>
         <Rect x="0" y="0" width={w} height={h} fill="url(#go-bg)" opacity={0.92} />

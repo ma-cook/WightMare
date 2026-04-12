@@ -18,7 +18,7 @@ import {
   View,
   type NativeTouchEvent,
 } from 'react-native';
-import Svg, { Defs, LinearGradient, Stop, Rect, Path, Text as SvgText } from 'react-native-svg';
+import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
 
 import {
   CELL_SIZE,
@@ -135,10 +135,16 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
       // Update survival time
       gs.survivalTime = (now - gs.startTime) / 1000;
 
-      // Build dragged-line ID set once per frame for O(1) lookups
-      const draggedLineIds = new Set(gs.draggingMap.values());
+      // Check if a line is being dragged — O(n) but n is always 0-2
+      const isDragged = (lineId: string): boolean => {
+        for (const v of gs.draggingMap.values()) {
+          if (v === lineId) return true;
+        }
+        return false;
+      };
 
-      for (const dot of gs.dots) {
+      for (let dotIndex = 0; dotIndex < gs.dots.length; dotIndex++) {
+        const dot = gs.dots[dotIndex];
         // ── Animate radius toward targetRadius ─────────────────────────────
         if (dot.radius < dot.targetRadius) {
           if (dot.growStartTime === 0) {
@@ -155,27 +161,33 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
         }
 
         // ── Determine spawn interval boost for larger dot ──────────────────
-        const dotIndex = gs.dots.indexOf(dot);
         const otherDot = gs.dots[1 - dotIndex];
         const isLarger = otherDot ? dot.targetRadius > otherDot.targetRadius : false;
         const spawnBoost = isLarger ? LARGER_DOT_SPAWN_BOOST : 0;
 
         // ── Pending spawn batches (staggered second wave / third wave) ────
-        dot.pendingBatches = dot.pendingBatches.filter((batch) => {
-          if (now < batch.spawnAt) return true;
-          const avail = Math.max(0, MAX_UNCONNECTED_PER_DOT - dot.unconnectedCount);
-          const n = Math.min(batch.count, avail);
-          for (let si = 0; si < n; si++) {
-            const angle = Math.random() * Math.PI * 2;
-            const newLine = createLine(dot.id,
-              dot.x + Math.cos(angle) * dot.radius,
-              dot.y + Math.sin(angle) * dot.radius, now);
-            dot.lines.push(newLine);
-            gs.lineMap.set(newLine.id, newLine);
-            dot.unconnectedCount++;
+        {
+          let bw = 0;
+          for (let bi = 0; bi < dot.pendingBatches.length; bi++) {
+            const batch = dot.pendingBatches[bi];
+            if (now < batch.spawnAt) {
+              dot.pendingBatches[bw++] = batch;
+              continue;
+            }
+            const avail = Math.max(0, MAX_UNCONNECTED_PER_DOT - dot.unconnectedCount);
+            const toCreate = Math.min(batch.count, avail);
+            for (let si = 0; si < toCreate; si++) {
+              const angle = Math.random() * Math.PI * 2;
+              const newLine = createLine(dot.id,
+                dot.x + Math.cos(angle) * dot.radius,
+                dot.y + Math.sin(angle) * dot.radius, now);
+              dot.lines.push(newLine);
+              gs.lineMap.set(newLine.id, newLine);
+              dot.unconnectedCount++;
+            }
           }
-          return false;
-        });
+          dot.pendingBatches.length = bw;
+        }
 
         // ── Spawn ──────────────────────────────────────────────────────────
         const effectiveInterval = Math.max(1000, dot.spawnInterval - spawnBoost);
@@ -238,7 +250,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
           // ── Skip lines that are connected or being dragged ───────────────
           if (line.connectedToId !== null) continue;
-          if (gs.draggingMap.size > 0 && draggedLineIds.has(line.id)) continue;
+          if (gs.draggingMap.size > 0 && isDragged(line.id)) continue;
 
           // ── Move head ────────────────────────────────────────────────────
           const prevHead = headOf(line);
@@ -261,8 +273,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               const distToDot = Math.sqrt(distToDotSq) || 0.1;
               const awayAngle = Math.atan2(-dotDy, -dotDx);
               let angleDiff = awayAngle - line.direction;
-              while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-              while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+              angleDiff = ((angleDiff + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
               const pushStrength = 1 - distToDot / dot.radius;
               line.direction += angleDiff * (RETURN_FORCE * 3) * pushStrength * dt;
             } else {
@@ -271,8 +282,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
                 const distToDot = Math.sqrt(distToDotSq);
                 const angleToCenter = Math.atan2(dotDy, dotDx);
                 let angleDiff = angleToCenter - line.direction;
-                while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-                while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+                angleDiff = ((angleDiff + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
                 const t = Math.min(
                   (distToDot - exploreInner) / exploreRange,
                   1,
@@ -380,10 +390,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
       gs.loopTimeSec = timestamp * 0.001;
       gs.frameCount++;
-      // Throttle React renders to ~30fps (every other frame) to halve reconciliation cost
-      if (gs.frameCount % 2 === 0) {
-        triggerRender();
-      }
+      triggerRender();
     },
     [width, height, triggerRender],
   );
@@ -399,9 +406,10 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
   // ─────────────────────────────────────────────────────────────────────────
 
   const processTouches = useCallback(
-    (touches: NativeTouchEvent[], phase: 'start' | 'move' | 'end') => {
+    (touches: ArrayLike<NativeTouchEvent>, phase: 'start' | 'move' | 'end') => {
       const gs = stateRef.current;
-      for (const touch of touches) {
+      for (let ti = 0; ti < touches.length; ti++) {
+        const touch = touches[ti];
         const id = String(touch.identifier);
 
         if (phase === 'start') {
@@ -435,7 +443,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             if (line.pathPoints.length > MAX_PATH_POINTS) {
               line.pathPoints = compressPath(line.pathPoints);
             }
-            const parentDot = gs.dots.find((d) => d.id === line.dotId);
+            const parentDot = line.dotId === gs.dots[0].id ? gs.dots[0] : gs.dots[1];
             if (parentDot) {
               parentDot.coveredCells.add(
                 packCell((newPt.x * INV_CELL_SIZE) | 0, (newPt.y * INV_CELL_SIZE) | 0),
@@ -467,7 +475,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             draggedLine.connectedToId = snapTarget.id;
             snapTarget.connectedToId = draggedLine.id;
             gs.totalConnected++;
-            const parentDot = gs.dots.find((d) => d.id === draggedLine.dotId);
+            const parentDot = draggedLine.dotId === gs.dots[0].id ? gs.dots[0] : gs.dots[1];
             if (parentDot) {
               // Decrement unconnected counter for the parent dot
               parentDot.unconnectedCount -= 2; // both lines are now connected
@@ -598,9 +606,15 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
   const gs = stateRef.current;
   const renderTime = gs.loopTimeSec;
+  const renderNow = Date.now();
 
-  // Build dragged-line ID set once per render for O(1) lookups
-  const renderDraggedIds = new Set(gs.draggingMap.values());
+  // Check if a line is being dragged — avoids Set allocation for 0-2 entries
+  const isLineDragged = (lineId: string): boolean => {
+    for (const v of gs.draggingMap.values()) {
+      if (v === lineId) return true;
+    }
+    return false;
+  };
 
   // Determine which side gets the warm tone based on which dot is larger
   const leftDot = gs.dots[0];
@@ -613,17 +627,17 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
       <View
         ref={touchLayerRef}
         style={[styles.touchLayer, { width, height }]}
-        onTouchStart={(e) => processTouches(Array.from(e.nativeEvent.changedTouches || [e.nativeEvent]), 'start')}
-        onTouchMove={(e) => processTouches(Array.from(e.nativeEvent.changedTouches || [e.nativeEvent]), 'move')}
-        onTouchEnd={(e) => processTouches(Array.from(e.nativeEvent.changedTouches || [e.nativeEvent]), 'end')}
-        onTouchCancel={(e) => processTouches(Array.from(e.nativeEvent.changedTouches || [e.nativeEvent]), 'end')}
+        onTouchStart={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'start')}
+        onTouchMove={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'move')}
+        onTouchEnd={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'end')}
+        onTouchCancel={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'end')}
       >
         <Svg width={width} height={height} style={styles.svg}>
           {/* Dynamic gradient — warm side follows the larger dot */}
           <Defs>
             <LinearGradient id="bg-grad" x1="0" y1="0" x2="1" y2="0">
-              <Stop offset="0" stopColor={leftLarger ? '#F5F0EB' : '#FFFFFF'} />
-              <Stop offset="1" stopColor={leftLarger ? '#FFFFFF' : '#F5F0EB'} />
+              <Stop offset="0" stopColor={leftLarger ? '#faecdb' : '#FFFFFF'} />
+              <Stop offset="1" stopColor={leftLarger ? '#FFFFFF' : '#faecdb'} />
             </LinearGradient>
           </Defs>
           <Rect x="0" y="0" width={width} height={height} fill="url(#bg-grad)" />
@@ -648,9 +662,16 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           })}
           {/* Connection pulse flashes — bright flash along connected paths */}
           {gs.dots.map((dot: DotState) => {
-            const pulseNow = Date.now();
-            dot.connectionFlashes = dot.connectionFlashes.filter(f => pulseNow - f.startTime < 200);
-            return dot.connectionFlashes.length > 0 ? (
+            const pulseNow = renderNow;
+            // In-place compaction — avoids allocating a new array via .filter()
+            let fw = 0;
+            for (let fi = 0; fi < dot.connectionFlashes.length; fi++) {
+              if (pulseNow - dot.connectionFlashes[fi].startTime < 200) {
+                dot.connectionFlashes[fw++] = dot.connectionFlashes[fi];
+              }
+            }
+            dot.connectionFlashes.length = fw;
+            return fw > 0 ? (
               <Path
                 key={`${dot.id}-pulse`}
                 d={dot.connectionFlashes.map(f => f.svgPath).join(' ')}
@@ -665,68 +686,57 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           })}
           {/* Active (unconnected) lines — batched into merged <Path> per dot */}
           {gs.dots.map((dot: DotState) => {
-            const pathParts: string[] = [];
-            const closeCallPaths: string[] = [];
-            const outerCircles: string[] = [];
-            const innerCirclesLeft: string[] = [];
-            const innerCirclesRight: string[] = [];
+            let linePaths = '';
+            let closeCallD = '';
+            let outerD = '';
+            let innerD = '';
             let hasDragging = false;
-            const dragOuterCircles: string[] = [];
-            const dragInnerLeft: string[] = [];
-            const dragInnerRight: string[] = [];
+            let dragOuterD = '';
+            let dragInnerD = '';
+            let hasLines = false;
 
             for (const line of dot.lines) {
               if (line.connectedToId !== null) continue;
-              const isDragging = renderDraggedIds.has(line.id);
+              hasLines = true;
+              const isDragging = isLineDragged(line.id);
               const svgPath = line.cachedWiggleSvg
                 || (line.cachedWiggleSvg = pointsToWiggledSvgPath(line.pathPoints, renderTime, line.wiggleVariant));
               // Close-call: head within 20px of any edge → red
               const head = headOf(line);
               const isCloseCall = !isDragging && (head.x < 20 || head.y < 20 || head.x > width - 20 || head.y > height - 20);
               if (isCloseCall) {
-                closeCallPaths.push(svgPath);
+                closeCallD += (closeCallD ? ' ' : '') + svgPath;
               } else {
-                pathParts.push(svgPath);
+                linePaths += (linePaths ? ' ' : '') + svgPath;
               }
               const hx = Math.round(head.x);
               const hy = Math.round(head.y);
               if (isDragging) {
                 hasDragging = true;
-                // Expanding head: grows over time while held (caps at 3s / 8x)
-                const dragStart = gs.dragStartTime.get(line.id) || Date.now();
-                const heldSec = Math.min((Date.now() - dragStart) / 1000, 3);
+                const dragStart = gs.dragStartTime.get(line.id) || renderNow;
+                const heldSec = Math.min((renderNow - dragStart) / 1000, 3);
                 const sizeMult = Math.pow(2, heldSec);
                 const outerR = Math.round(9 * sizeMult * 10) / 10;
                 const innerR = Math.round(4 * sizeMult * 10) / 10;
-                dragOuterCircles.push(`M ${hx - outerR} ${hy} a ${outerR} ${outerR} 0 1 0 ${outerR * 2} 0 a ${outerR} ${outerR} 0 1 0 -${outerR * 2} 0`);
-                if (dot.id === 'dot-left') {
-                  dragInnerLeft.push(`M ${hx - innerR} ${hy} a ${innerR} ${innerR} 0 1 0 ${innerR * 2} 0 a ${innerR} ${innerR} 0 1 0 -${innerR * 2} 0`);
-                } else {
-                  dragInnerRight.push(`M ${hx - innerR} ${hy} a ${innerR} ${innerR} 0 1 0 ${innerR * 2} 0 a ${innerR} ${innerR} 0 1 0 -${innerR * 2} 0`);
-                }
+                dragOuterD += `M ${hx - outerR} ${hy} a ${outerR} ${outerR} 0 1 0 ${outerR * 2} 0 a ${outerR} ${outerR} 0 1 0 -${outerR * 2} 0`;
+                dragInnerD += `M ${hx - innerR} ${hy} a ${innerR} ${innerR} 0 1 0 ${innerR * 2} 0 a ${innerR} ${innerR} 0 1 0 -${innerR * 2} 0`;
               } else {
-                outerCircles.push(`M ${hx - 6} ${hy} a 6 6 0 1 0 12 0 a 6 6 0 1 0 -12 0`);
-                if (dot.id === 'dot-left') {
-                  innerCirclesLeft.push(`M ${hx - 2.5} ${hy} a 2.5 2.5 0 1 0 5 0 a 2.5 2.5 0 1 0 -5 0`);
-                } else {
-                  innerCirclesRight.push(`M ${hx - 2.5} ${hy} a 2.5 2.5 0 1 0 5 0 a 2.5 2.5 0 1 0 -5 0`);
-                }
+                outerD += `M ${hx - 6} ${hy} a 6 6 0 1 0 12 0 a 6 6 0 1 0 -12 0`;
+                innerD += `M ${hx - 2.5} ${hy} a 2.5 2.5 0 1 0 5 0 a 2.5 2.5 0 1 0 -5 0`;
               }
             }
 
-            if (pathParts.length === 0 && closeCallPaths.length === 0) return null;
-            const innerCircles = dot.id === 'dot-left' ? innerCirclesLeft : innerCirclesRight;
-            const dragInner = dot.id === 'dot-left' ? dragInnerLeft : dragInnerRight;
+            if (!hasLines) return null;
             const innerColor = dot.id === 'dot-left' ? '#ffffff' : '#bbbbbb';
 
             return (
               <React.Fragment key={`${dot.id}-active`}>
-                {pathParts.length > 0 && <Path d={pathParts.join(' ')} stroke={LINE_COLOR} strokeWidth={6} fill="none" strokeLinecap="round" strokeLinejoin="round" />}
-                {closeCallPaths.length > 0 && <Path d={closeCallPaths.join(' ')} stroke="#CC0000" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />}
-                {outerCircles.length > 0 && <Path d={outerCircles.join(' ')} fill={HEAD_COLOR} />}
-                {innerCircles.length > 0 && <Path d={innerCircles.join(' ')} fill={innerColor} />}
-                {hasDragging && dragOuterCircles.length > 0 && <Path d={dragOuterCircles.join(' ')} fill={HEAD_COLOR} />}
-                {hasDragging && dragInner.length > 0 && <Path d={dragInner.join(' ')} fill={innerColor} />}
+                {linePaths && <Path d={linePaths} stroke={LINE_COLOR} strokeWidth={6} fill="none" strokeLinecap="round" strokeLinejoin="round" />}
+                {closeCallD && <Path d={closeCallD} stroke="#CC0000" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />}
+                {outerD && <Path d={outerD} fill={HEAD_COLOR} />}
+                {innerD && <Path d={innerD} fill={innerColor} />}
+                {hasDragging && dragOuterD && <Path d={dragOuterD} fill={HEAD_COLOR} />}
+                {hasDragging && dragInnerD && <Path d={dragInnerD} fill={innerColor} />}
               </React.Fragment>
             );
           })}
@@ -735,7 +745,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           {gs.dots.map((dot: DotState) => {
             let r = dot.radius;
             // Spawn pulse: 8% scale bump decaying over 300ms
-            const pulseElapsed = Date.now() - dot.lastSpawnPulseTime;
+            const pulseElapsed = renderNow - dot.lastSpawnPulseTime;
             if (pulseElapsed < 300 && dot.lastSpawnPulseTime > 0) {
               r *= 1 + 0.08 * (1 - pulseElapsed / 300);
             }
@@ -789,7 +799,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           {/* Flash indicator at dot center on reward/penalty (fades out) */}
           {gs.dots.map((dot: DotState) => {
             if (!dot.flash) return null;
-            const elapsed = Date.now() - dot.flash.startTime;
+            const elapsed = renderNow - dot.flash.startTime;
             const duration = dot.flash.type === 'reward' ? 500 : 250;
             if (elapsed >= duration) {
               dot.flash = null;
@@ -814,23 +824,22 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             );
           })}
 
-          {/* Combo counter above each dot */}
+          {/* Combo counter — red circles inside the parent dot */}
           {gs.dots.map((dot: DotState) => {
             if (dot.combo <= 0) return null;
-            return (
-              <SvgText
-                key={`${dot.id}-combo`}
-                x={dot.x}
-                y={dot.y - dot.radius - 10}
-                textAnchor="middle"
-                fontSize={14}
-                fontWeight="900"
-                fontFamily="serif"
-                fill="#8B0000"
-              >
-                x{dot.combo}
-              </SvgText>
-            );
+            const count = Math.min(dot.combo, 10); // cap visual dots at 10
+            const r = dot.radius;
+            const dotR = Math.max(2, Math.min(4, r * 0.12)); // circle radius scales with dot size
+            // Arrange in a ring at 55% of the parent dot's radius
+            const ringR = r * 0.55;
+            let d = '';
+            for (let i = 0; i < count; i++) {
+              const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
+              const cx = Math.round(dot.x + Math.cos(angle) * ringR);
+              const cy = Math.round(dot.y + Math.sin(angle) * ringR);
+              d += `M ${cx - dotR} ${cy} a ${dotR} ${dotR} 0 1 0 ${dotR * 2} 0 a ${dotR} ${dotR} 0 1 0 -${dotR * 2} 0`;
+            }
+            return <Path key={`${dot.id}-combo`} d={d} fill="#8B0000" />;
           })}
 
           {/* Writhing flecks inside each dot — cached, recomputed every 4 render frames */}

@@ -2,11 +2,12 @@
   "expo": {
     "name": "WightMare",
     "slug": "wightmare",
-    "version": "24.0.0",
+    "version": "27.0.0",
     "orientation": "landscape",
+    "icon": "./assests/icon.PNG",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assests/image (5).png",
+      "image": "./assests/icon.PNG",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -18,9 +19,9 @@
     },
     "android": {
       "package": "com.macook.wightmare",
-      "versionCode": 18,
+      "versionCode": 25,
       "adaptiveIcon": {
-        "foregroundImage": "./assests/image (5).png",
+        "foregroundImage": "./assests/icon.PNG",
         "backgroundColor": "#ffffff"
       }
     },
