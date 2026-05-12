@@ -11,6 +11,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { getDownloadURL, ref } from 'firebase/storage';
+import { storage } from './services/firebase';
 import { StatusBar } from 'expo-status-bar';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as NavigationBar from 'expo-navigation-bar';
@@ -228,8 +230,12 @@ export default function App() {
             )}
           </View>
 
-          {/* Right column — empty for balance */}
-          <View style={styles.menuRight} />
+          {/* Right column — APK download (web only) */}
+          <View style={styles.menuRight}>
+            {Platform.OS === 'web' && (
+              <ApkDownload />
+            )}
+          </View>
         </View>
 
         {Platform.OS === 'web' && (
@@ -256,6 +262,54 @@ export default function App() {
     </View>
   );
 }
+
+function ApkDownload() {
+  const handleDownload = useCallback(async () => {
+    try {
+      const url = await getDownloadURL(ref(storage, 'downloads/Wightmare.apk'));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Wightmare.apk';
+      a.click();
+    } catch (e) {
+      console.error('APK download failed', e);
+    }
+  }, []);
+
+  return (
+    <View style={apkStyles.container}>
+      <Text style={apkStyles.title}>Wightmare APK</Text>
+      <Pressable style={apkStyles.button} onPress={handleDownload}>
+        <Text style={apkStyles.buttonText}>Download</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+const apkStyles = StyleSheet.create({
+  container: {
+    alignItems: 'center',
+    gap: 10,
+  },
+  title: {
+    fontSize: 16,
+    fontFamily: 'serif',
+    fontWeight: '700',
+    color: '#111111',
+  },
+  button: {
+    backgroundColor: '#111111',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 24,
+  },
+  buttonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+    fontFamily: 'serif',
+  },
+});
 
 const styles = StyleSheet.create({
   container: {
