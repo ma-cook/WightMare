@@ -78,10 +78,40 @@ interface Props {
   onReturnToMenu: (survivalTime?: number) => void;
 }
 
+// ─── Memoized gradient background — only re-renders when warm side flips ────
+const GradientBackground = React.memo(function GradientBackground({
+  width,
+  height,
+  leftLarger,
+}: {
+  width: number;
+  height: number;
+  leftLarger: boolean;
+}) {
+  return (
+    <Svg
+      width={width}
+      height={height}
+      style={[StyleSheet.absoluteFill, { zIndex: 0 }]}
+      pointerEvents="none"
+    >
+      <Defs>
+        <LinearGradient id="bg-grad" x1="0" y1="0" x2="1" y2="0">
+          <Stop offset="0" stopColor={leftLarger ? '#faecdb' : '#FFFFFF'} />
+          <Stop offset="1" stopColor={leftLarger ? '#FFFFFF' : '#faecdb'} />
+        </LinearGradient>
+      </Defs>
+      <Rect x="0" y="0" width={width} height={height} fill="url(#bg-grad)" />
+    </Svg>
+  );
+});
+
 export default function GameCanvas({ width, height, playerName, personalBest, onReturnToMenu }: Props) {
   // ── React state: only used to trigger re-renders ──────────────────────────
   const [renderTick, setRenderTick] = useState(0);
   const triggerRender = useCallback(() => setRenderTick((t) => t + 1), []);
+  const [leftLarger, setLeftLarger] = useState(true);
+  const leftLargerRef = useRef(true);
 
   // ── All mutable game data lives here ─────────────────────────────────────
   const stateRef = useRef<GameState>(createInitialState(width, height));
@@ -619,10 +649,15 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
   // Determine which side gets the warm tone based on which dot is larger
   const leftDot = gs.dots[0];
   const rightDot = gs.dots[1];
-  const leftLarger = leftDot && rightDot ? leftDot.targetRadius >= rightDot.targetRadius : true;
+  const nextLeftLarger = leftDot && rightDot ? leftDot.targetRadius >= rightDot.targetRadius : true;
+  if (nextLeftLarger !== leftLargerRef.current) {
+    leftLargerRef.current = nextLeftLarger;
+    setLeftLarger(nextLeftLarger);
+  }
 
   return (
     <View style={styles.container}>
+      <GradientBackground width={width} height={height} leftLarger={leftLarger} />
       {/* Touch / mouse capture layer */}
       <View
         ref={touchLayerRef}
@@ -633,14 +668,6 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
         onTouchCancel={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'end')}
       >
         <Svg width={width} height={height} style={styles.svg}>
-          {/* Dynamic gradient — warm side follows the larger dot */}
-          <Defs>
-            <LinearGradient id="bg-grad" x1="0" y1="0" x2="1" y2="0">
-              <Stop offset="0" stopColor={leftLarger ? '#faecdb' : '#FFFFFF'} />
-              <Stop offset="1" stopColor={leftLarger ? '#FFFFFF' : '#faecdb'} />
-            </LinearGradient>
-          </Defs>
-          <Rect x="0" y="0" width={width} height={height} fill="url(#bg-grad)" />
           {/* Connected lines — one single <Path> per dot for all connected lines */}
           {gs.dots.map((dot: DotState) => {
             // Lazily rebuild the joined SVG string when new paths were added
