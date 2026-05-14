@@ -212,10 +212,10 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               : gs.totalConnected >= 75 ? 8
               : gs.totalConnected >= 25 ? 6
               : 4)
-            : (gs.totalConnected >= 125 ? 8
-              : gs.totalConnected >= 75 ? 6
-              : gs.totalConnected >= 25 ? 4
-              : 2);
+            : (gs.totalConnected >= 125 ? 10
+              : gs.totalConnected >= 75 ? 8
+              : gs.totalConnected >= 25 ? 6
+              : 4);
           // Cap unconnected lines per dot
           const allowed = Math.max(0, MAX_UNCONNECTED_PER_DOT - dot.unconnectedCount);
 
@@ -267,40 +267,40 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           // ── Move head ────────────────────────────────────────────────────
           const prevHead = headOf(line);
 
-          // Steer toward parent dot to keep exploring nearby
-          // After ESCAPE_TIME, the line breaks free and ignores the explore zone
+          // After ESCAPE_TIME the line breaks free of the explore zone.
           const escaped = now - line.spawnTime > ESCAPE_TIME;
 
-          if (!escaped) {
+          // Always push the head off the dot surface — escaped or not.
+          // This prevents lines from drifting back inside and piling up.
+          const dotDx = dot.x - prevHead.x;
+          const dotDy = dot.y - prevHead.y;
+          const distToDotSq = dotDx * dotDx + dotDy * dotDy;
+          const dotRadiusSq = dot.radius * dot.radius;
+
+          if (distToDotSq < dotRadiusSq) {
+            // Inside the dot — steer sharply away from center
+            const distToDot = Math.sqrt(distToDotSq) || 0.1;
+            const awayAngle = Math.atan2(-dotDy, -dotDx);
+            let angleDiff = awayAngle - line.direction;
+            angleDiff = ((angleDiff + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
+            const pushStrength = 1 - distToDot / dot.radius;
+            line.direction += angleDiff * (RETURN_FORCE * 3) * pushStrength * dt;
+          } else if (!escaped) {
+            // Explore-zone pull-back (only while not yet escaped)
             const exploreR = dot.radius * EXPLORE_RADIUS_MULT;
             const exploreInner = exploreR * 0.3;
             const exploreRange = exploreR * 0.7;
-            const dotDx = dot.x - prevHead.x;
-            const dotDy = dot.y - prevHead.y;
-            const distToDotSq = dotDx * dotDx + dotDy * dotDy;
-            const dotRadiusSq = dot.radius * dot.radius;
-
-            if (distToDotSq < dotRadiusSq) {
-              // Inside the dot — steer sharply away from center
-              const distToDot = Math.sqrt(distToDotSq) || 0.1;
-              const awayAngle = Math.atan2(-dotDy, -dotDx);
-              let angleDiff = awayAngle - line.direction;
+            const exploreInnerSq = exploreInner * exploreInner;
+            if (distToDotSq > exploreInnerSq) {
+              const distToDot = Math.sqrt(distToDotSq);
+              const angleToCenter = Math.atan2(dotDy, dotDx);
+              let angleDiff = angleToCenter - line.direction;
               angleDiff = ((angleDiff + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
-              const pushStrength = 1 - distToDot / dot.radius;
-              line.direction += angleDiff * (RETURN_FORCE * 3) * pushStrength * dt;
-            } else {
-              const exploreInnerSq = exploreInner * exploreInner;
-              if (distToDotSq > exploreInnerSq) {
-                const distToDot = Math.sqrt(distToDotSq);
-                const angleToCenter = Math.atan2(dotDy, dotDx);
-                let angleDiff = angleToCenter - line.direction;
-                angleDiff = ((angleDiff + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
-                const t = Math.min(
-                  (distToDot - exploreInner) / exploreRange,
-                  1,
-                );
-                line.direction += angleDiff * RETURN_FORCE * t * dt;
-              }
+              const t = Math.min(
+                (distToDot - exploreInner) / exploreRange,
+                1,
+              );
+              line.direction += angleDiff * RETURN_FORCE * t * dt;
             }
           }
 
@@ -370,8 +370,24 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           }
         }
 
+        // ── Cull zombie lines (penalized + escaped = unreachable by player) ──
+        {
+          let w = 0;
+          for (let li = 0; li < dot.lines.length; li++) {
+            const l = dot.lines[li];
+            if (l.penaltyApplied && !l.connectedToId && (now - l.spawnTime > ESCAPE_TIME)) {
+              gs.lineMap.delete(l.id);
+              dot.unconnectedCount = Math.max(0, dot.unconnectedCount - 1);
+            } else {
+              dot.lines[w++] = l;
+            }
+          }
+          dot.lines.length = w;
+        }
+
         // ── Dot growth (coverage-based: expand when 90% ring covered) ────
-        if (dot.coverageDirty) {
+        // Throttled to once per 6 frames per dot to keep the O(r²) ring scan cheap.
+        if (dot.coverageDirty && gs.frameCount % 6 === dotIndex) {
           dot.coverageDirty = false;
           const innerR = dot.targetRadius;
           const outerR = dot.targetRadius + DOT_GROWTH_AMOUNT;
