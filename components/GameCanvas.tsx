@@ -506,21 +506,6 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           }
         }
 
-        // ── Cull zombie lines (penalized + escaped = unreachable by player) ──
-        {
-          let w = 0;
-          for (let li = 0; li < dot.lines.length; li++) {
-            const l = dot.lines[li];
-            if (l.penaltyApplied && !l.connectedToId && (now - l.spawnTime > ESCAPE_TIME)) {
-              gs.lineMap.delete(l.id);
-              dot.unconnectedCount = Math.max(0, dot.unconnectedCount - 1);
-            } else {
-              dot.lines[w++] = l;
-            }
-          }
-          dot.lines.length = w;
-        }
-
         // ── Dot growth (coverage-based: expand when 90% ring covered) ────
         // Incremental coverage counting keeps each check O(1); only ring rebuilds are O(k).
         if (dot.coverageDirty && gs.frameCount % 6 === dotIndex) {
