@@ -708,6 +708,11 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
                 markCoveredCell(parentDot, pt.x, pt.y);
               }
 
+              // Persist connected lines as a single static gray stroke.
+              if (draggedLine.cachedSvgPath) parentDot.connectedPaths.push(draggedLine.cachedSvgPath);
+              if (snapTarget.cachedSvgPath) parentDot.connectedPaths.push(snapTarget.cachedSvgPath);
+              parentDot.connectedSvgDirty = true;
+
               // Remove from storage arrays and recycle objects for reuse.
               let w = 0;
               for (let li = 0; li < parentDot.lines.length; li++) {
@@ -819,6 +824,25 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
         onTouchCancel={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'end')}
       >
         <Svg width={width} height={height} style={styles.svg}>
+          {/* Connected (static) lines — persistent gray stroke */}
+          {gs.dots.map((dot: DotState) => {
+            if (dot.connectedSvgDirty) {
+              dot.cachedConnectedSvg = dot.connectedPaths.join(' ');
+              dot.connectedSvgDirty = false;
+            }
+            return dot.cachedConnectedSvg ? (
+              <Path
+                key={`${dot.id}-connected`}
+                d={dot.cachedConnectedSvg}
+                stroke="#444444"
+                strokeWidth={6}
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            ) : null;
+          })}
+
           {/* Active (unconnected) lines — batched into merged <Path> per dot */}
           {gs.dots.map((dot: DotState) => {
             let linePaths = '';
