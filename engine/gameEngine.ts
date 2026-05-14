@@ -9,6 +9,8 @@ export interface SquigglyLine {
   id: string;
   numericId: number;
   dotId: string;
+  /** Id of this line's spawn partner, if any. */
+  partnerId: string | null;
   /** Full path history, index 0 is anchored at the parent dot. */
   pathPoints: Point[];
   /** Current movement direction in radians. */
@@ -23,8 +25,12 @@ export interface SquigglyLine {
   cachedSvgPath: string | null;
   /** Cached wiggled SVG path string — rebuilt only when points change. */
   cachedWiggleSvg: string | null;
+  /** Frame count when the wiggle cache was last rebuilt. */
+  cachedWiggleFrame: number;
   /** Number of path points when the wiggle cache was last built. */
   cachedWiggleLen: number;
+  /** LOD stride used for the wiggle cache (1 = full detail). */
+  cachedWiggleStride: number;
   /** Wiggle animation variant (0, 1, or 2) — assigned randomly at spawn. */
   wiggleVariant: number;
 }
@@ -68,6 +74,10 @@ export interface DotState {
   pendingBatches: Array<{ count: number; spawnAt: number }>;
   /** Count of unconnected lines — maintained incrementally to avoid filter() each frame. */
   unconnectedCount: number;
+  /** Cells belonging to the next growth ring around this dot. */
+  growthRingCells: Set<number>;
+  /** Number of growth-ring cells currently covered. */
+  growthRingCovered: number;
   /** Pre-allocated buffer for dot circle rendering (avoids per-frame allocation). */
   _dotBuf: Float64Array;
   /** Temporary flash indicator: 'reward' (connected in time) or 'penalty' (missed). */
@@ -161,6 +171,8 @@ export const EXPLORE_RADIUS_MULT = 12;
 export const RETURN_FORCE = 3.0;
 /** Grid cell size (px) for tracking area coverage around each dot. */
 export const CELL_SIZE = 6;
+/** Spatial-hash cell size (px) for active line-head lookups. */
+export const HEAD_GRID_CELL_SIZE = 48;
 /** Fraction of ring cells that must be covered for the dot to grow. */
 export const COVERAGE_THRESHOLD = 0.8;
 
@@ -170,6 +182,7 @@ export const POINT_SAMPLE_DISTANCE_SQ = POINT_SAMPLE_DISTANCE * POINT_SAMPLE_DIS
 export const HIT_RADIUS_SQ = HIT_RADIUS * HIT_RADIUS;
 export const SNAP_RADIUS_SQ = SNAP_RADIUS * SNAP_RADIUS;
 export const INV_CELL_SIZE = 1 / CELL_SIZE;
+export const INV_HEAD_GRID_CELL_SIZE = 1 / HEAD_GRID_CELL_SIZE;
 
 /** Pack cell indices into a single number for Set<number> lookups. */
 export function packCell(cx: number, cy: number): number {
@@ -191,6 +204,7 @@ export function createLine(
     id: `line-${_lineCounter}`,
     numericId: _lineCounter,
     dotId,
+    partnerId: null,
     // Two points: fixed anchor at dot + live head (same position initially)
     pathPoints: [{ x: dotX, y: dotY }, { x: dotX, y: dotY }],
     direction: Math.random() * Math.PI * 2,
@@ -199,7 +213,9 @@ export function createLine(
     penaltyApplied: false,
     cachedSvgPath: null,
     cachedWiggleSvg: null,
+    cachedWiggleFrame: -1,
     cachedWiggleLen: 0,
+    cachedWiggleStride: 1,
     wiggleVariant: (Math.random() * 3) | 0,
   };
 }
@@ -245,6 +261,8 @@ export function createInitialState(width: number, height: number): GameState {
         growStartRadius: INITIAL_DOT_RADIUS,
         pendingBatches: [],
         unconnectedCount: 0,
+        growthRingCells: new Set<number>(),
+        growthRingCovered: 0,
         _dotBuf: new Float64Array(72),
         flash: null,
         connectionFlashes: [],
@@ -274,6 +292,8 @@ export function createInitialState(width: number, height: number): GameState {
         growStartRadius: INITIAL_DOT_RADIUS,
         pendingBatches: [],
         unconnectedCount: 0,
+        growthRingCells: new Set<number>(),
+        growthRingCovered: 0,
         _dotBuf: new Float64Array(72),
         flash: null,
         connectionFlashes: [],

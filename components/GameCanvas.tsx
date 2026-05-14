@@ -30,7 +30,9 @@ import {
   DOT_GROWTH_AMOUNT,
   ESCAPE_TIME,
   EXPLORE_RADIUS_MULT,
+  HEAD_GRID_CELL_SIZE,
   HIT_RADIUS_SQ,
+  INV_HEAD_GRID_CELL_SIZE,
   INV_CELL_SIZE,
   LARGER_DOT_SPAWN_BOOST,
   LINE_SPEED,
@@ -56,7 +58,7 @@ import {
   compressPath,
   distanceSq,
   pointsToSvgPath,
-  pointsToWiggledSvgPath,
+  pointsToWiggledSvgPathLod,
 } from '../engine/squigglyGenerator';
 import { useGameLoop } from '../hooks/useGameLoop';
 import GameOverScreen from './GameOverScreen';
@@ -69,6 +71,12 @@ const CONNECTED_COLOR = '#444444';
 
 // ─── Edge margin: how close to the border a head must be to trigger loss ─────
 const EDGE_MARGIN = 4;
+
+// Per-dot SVG path cache — dot shape is rebuilt every 2 frames only (30fps is
+// enough for a background blob; halves path-build work and lets the GPU reuse
+// the rasterised fill more often, which is the main cost at large radii).
+const _dotSvgCache = new Map<string, string>();
+const _ringOffsetsCache = new Map<number, Array<[number, number]>>();
 
 interface Props {
   width: number;
@@ -91,6 +99,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
   // ── All mutable game data lives here ─────────────────────────────────────
   const stateRef = useRef<GameState>(createInitialState(width, height));
+  const headGridRef = useRef<Map<number, string[]>>(new Map());
 
   // ─────────────────────────────────────────────────────────────────────────
   // Helpers
@@ -103,6 +112,82 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
   const headOf = (line: SquigglyLine): Point =>
     line.pathPoints[line.pathPoints.length - 1];
 
+  const markCoveredCell = (dot: DotState, x: number, y: number): void => {
+    const key = packCell((x * INV_CELL_SIZE) | 0, (y * INV_CELL_SIZE) | 0);
+    const before = dot.coveredCells.size;
+    dot.coveredCells.add(key);
+    if (dot.coveredCells.size !== before) {
+      dot.coverageDirty = true;
+      if (dot.growthRingCells.has(key)) {
+        dot.growthRingCovered++;
+      }
+    }
+  };
+
+  const getRingOffsets = (outerR: number): Array<[number, number]> => {
+    const key = Math.ceil(outerR / CELL_SIZE);
+    const cached = _ringOffsetsCache.get(key);
+    if (cached) return cached;
+    const offsets: Array<[number, number]> = [];
+    for (let dx = -key; dx <= key; dx++) {
+      for (let dy = -key; dy <= key; dy++) {
+        offsets.push([dx, dy]);
+      }
+    }
+    _ringOffsetsCache.set(key, offsets);
+    return offsets;
+  };
+
+  const rebuildGrowthRing = (dot: DotState): void => {
+    dot.growthRingCells.clear();
+    dot.growthRingCovered = 0;
+
+    const innerR = dot.targetRadius;
+    const outerR = dot.targetRadius + DOT_GROWTH_AMOUNT;
+    const innerRSq = innerR * innerR;
+    const outerRSq = outerR * outerR;
+
+    const baseCX = Math.floor(dot.x * INV_CELL_SIZE);
+    const baseCY = Math.floor(dot.y * INV_CELL_SIZE);
+    const offsets = getRingOffsets(outerR);
+    for (let i = 0; i < offsets.length; i++) {
+      const [dx, dy] = offsets[i];
+      const cx = baseCX + dx;
+      const cy = baseCY + dy;
+      const px = (cx + 0.5) * CELL_SIZE;
+      const py = (cy + 0.5) * CELL_SIZE;
+      const dSq = (px - dot.x) ** 2 + (py - dot.y) ** 2;
+      if (dSq >= innerRSq && dSq < outerRSq) {
+        const packed = packCell(cx, cy);
+        dot.growthRingCells.add(packed);
+        if (dot.coveredCells.has(packed)) dot.growthRingCovered++;
+      }
+    }
+  };
+
+  const rebuildHeadGrid = (gs: GameState): void => {
+    const grid = headGridRef.current;
+    grid.clear();
+    for (let di = 0; di < gs.dots.length; di++) {
+      const dot = gs.dots[di];
+      for (let li = 0; li < dot.lines.length; li++) {
+        const line = dot.lines[li];
+        if (line.connectedToId !== null) continue;
+        const head = headOf(line);
+        const cell = packCell(
+          (head.x * INV_HEAD_GRID_CELL_SIZE) | 0,
+          (head.y * INV_HEAD_GRID_CELL_SIZE) | 0,
+        );
+        const bucket = grid.get(cell);
+        if (bucket) {
+          bucket.push(line.id);
+        } else {
+          grid.set(cell, [line.id]);
+        }
+      }
+    }
+  };
+
   /** Find the nearest unconnected line head within squared radius. */
   const nearestHead = (
     pt: Point,
@@ -112,15 +197,27 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
   ): SquigglyLine | undefined => {
     let best: SquigglyLine | undefined;
     let bestDistSq = radiusSq;
-    for (const dot of stateRef.current.dots) {
-      for (const line of dot.lines) {
-        if (line.id === excludeId) continue;
-        if (line.connectedToId !== null) continue;
-        if (sameDotId !== undefined && line.dotId !== sameDotId) continue;
-        const dSq = distanceSq(pt, headOf(line));
-        if (dSq < bestDistSq) {
-          bestDistSq = dSq;
-          best = line;
+    const radius = Math.sqrt(radiusSq);
+    const cellRadius = Math.max(1, Math.ceil(radius / HEAD_GRID_CELL_SIZE));
+    const cx0 = (pt.x * INV_HEAD_GRID_CELL_SIZE) | 0;
+    const cy0 = (pt.y * INV_HEAD_GRID_CELL_SIZE) | 0;
+    const grid = headGridRef.current;
+
+    for (let cx = cx0 - cellRadius; cx <= cx0 + cellRadius; cx++) {
+      for (let cy = cy0 - cellRadius; cy <= cy0 + cellRadius; cy++) {
+        const bucket = grid.get(packCell(cx, cy));
+        if (!bucket) continue;
+        for (let i = 0; i < bucket.length; i++) {
+          const line = findLine(bucket[i]);
+          if (!line) continue;
+          if (line.id === excludeId) continue;
+          if (line.connectedToId !== null) continue;
+          if (sameDotId !== undefined && line.dotId !== sameDotId) continue;
+          const dSq = distanceSq(pt, headOf(line));
+          if (dSq < bestDistSq) {
+            bestDistSq = dSq;
+            best = line;
+          }
         }
       }
     }
@@ -132,9 +229,16 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
   // ─────────────────────────────────────────────────────────────────────────
 
   const gameLoop = useCallback(
-    (dt: number, timestamp: number) => {
+    (dt: number, timestamp: number, shouldRender: boolean) => {
       const gs = stateRef.current;
       if (gs.status !== 'playing') return;
+
+      if (shouldRender) {
+        triggerRender();
+        return;
+      }
+
+      if (dt <= 0) return;
 
       const now = Date.now();
 
@@ -151,6 +255,9 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
       for (let dotIndex = 0; dotIndex < gs.dots.length; dotIndex++) {
         const dot = gs.dots[dotIndex];
+        if (dot.growthRingCells.size === 0) {
+          rebuildGrowthRing(dot);
+        }
         // ── Animate radius toward targetRadius ─────────────────────────────
         if (dot.radius < dot.targetRadius) {
           if (dot.growStartTime === 0) {
@@ -182,13 +289,31 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             }
             const avail = Math.max(0, MAX_UNCONNECTED_PER_DOT - dot.unconnectedCount);
             const toCreate = Math.min(batch.count, avail);
-            for (let si = 0; si < toCreate; si++) {
+            let created = 0;
+            while (created + 1 < toCreate) {
+              const angleA = Math.random() * Math.PI * 2;
+              const angleB = Math.random() * Math.PI * 2;
+              const a = createLine(dot.id,
+                dot.x + Math.cos(angleA) * dot.radius,
+                dot.y + Math.sin(angleA) * dot.radius, now);
+              const b = createLine(dot.id,
+                dot.x + Math.cos(angleB) * dot.radius,
+                dot.y + Math.sin(angleB) * dot.radius, now);
+              a.partnerId = b.id;
+              b.partnerId = a.id;
+              dot.lines.push(a, b);
+              gs.lineMap.set(a.id, a);
+              gs.lineMap.set(b.id, b);
+              dot.unconnectedCount += 2;
+              created += 2;
+            }
+            if (created < toCreate) {
               const angle = Math.random() * Math.PI * 2;
-              const newLine = createLine(dot.id,
+              const single = createLine(dot.id,
                 dot.x + Math.cos(angle) * dot.radius,
                 dot.y + Math.sin(angle) * dot.radius, now);
-              dot.lines.push(newLine);
-              gs.lineMap.set(newLine.id, newLine);
+              dot.lines.push(single);
+              gs.lineMap.set(single.id, single);
               dot.unconnectedCount++;
             }
           }
@@ -219,21 +344,41 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           // Cap unconnected lines per dot
           const allowed = Math.max(0, MAX_UNCONNECTED_PER_DOT - dot.unconnectedCount);
 
-          // Spawn lines staggered by 150ms each
+          // Spawn lines staggered in paired waves by 150ms each
           const toSpawn = Math.min(spawnCount, allowed);
-          for (let si = 0; si < toSpawn; si++) {
-            if (si === 0) {
-              // First line spawns immediately
+          const pairCount = (toSpawn / 2) | 0;
+          for (let pi = 0; pi < pairCount; pi++) {
+            if (pi === 0) {
+              const angleA = Math.random() * Math.PI * 2;
+              const angleB = Math.random() * Math.PI * 2;
+              const a = createLine(dot.id,
+                dot.x + Math.cos(angleA) * dot.radius,
+                dot.y + Math.sin(angleA) * dot.radius, now);
+              const b = createLine(dot.id,
+                dot.x + Math.cos(angleB) * dot.radius,
+                dot.y + Math.sin(angleB) * dot.radius, now);
+              a.partnerId = b.id;
+              b.partnerId = a.id;
+              dot.lines.push(a, b);
+              gs.lineMap.set(a.id, a);
+              gs.lineMap.set(b.id, b);
+              dot.unconnectedCount += 2;
+            } else {
+              dot.pendingBatches.push({ count: 2, spawnAt: now + pi * 150 });
+            }
+          }
+          if (toSpawn % 2 === 1) {
+            const oddDelay = pairCount === 0 ? 0 : pairCount * 150;
+            if (oddDelay === 0) {
               const angle = Math.random() * Math.PI * 2;
-              const newLine = createLine(dot.id,
+              const single = createLine(dot.id,
                 dot.x + Math.cos(angle) * dot.radius,
                 dot.y + Math.sin(angle) * dot.radius, now);
-              dot.lines.push(newLine);
-              gs.lineMap.set(newLine.id, newLine);
+              dot.lines.push(single);
+              gs.lineMap.set(single.id, single);
               dot.unconnectedCount++;
             } else {
-              // Subsequent lines staggered by 150ms
-              dot.pendingBatches.push({ count: 1, spawnAt: now + si * 150 });
+              dot.pendingBatches.push({ count: 1, spawnAt: now + oddDelay });
             }
           }
         }
@@ -243,15 +388,8 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           if (!line.connectedToId && !line.penaltyApplied) {
             if (now - line.spawnTime > CONNECT_PENALTY_WINDOW) {
               line.penaltyApplied = true;
-              // Find a partner from the same spawn batch still unconnected
-              const partner = dot.lines.find(
-                (l) =>
-                  l.id !== line.id &&
-                  Math.abs(l.spawnTime - line.spawnTime) < 200 &&
-                  !l.connectedToId &&
-                  !l.penaltyApplied,
-              );
-              if (partner) {
+              const partner = line.partnerId ? gs.lineMap.get(line.partnerId) : undefined;
+              if (partner && !partner.connectedToId && !partner.penaltyApplied) {
                 partner.penaltyApplied = true;
                 dot.spawnInterval = Math.max(1000, dot.spawnInterval - SPAWN_INTERVAL_DECREASE);
                 dot.flash = { type: 'penalty', startTime: now };
@@ -341,12 +479,10 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
             // Invalidate wiggle cache — will be rebuilt at render time
             line.cachedWiggleSvg = null;
+            line.cachedWiggleFrame = -1;
 
-            // Mark coverage cell
-            dot.coveredCells.add(
-              packCell((newHead.x * INV_CELL_SIZE) | 0, (newHead.y * INV_CELL_SIZE) | 0),
-            );
-            dot.coverageDirty = true;
+            // Mark coverage cell incrementally (updates growth-ring counter too)
+            markCoveredCell(dot, newHead.x, newHead.y);
 
             // Compress if too long (keeps first anchor + last head)
             if (line.pathPoints.length > MAX_PATH_POINTS) {
@@ -386,44 +522,28 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
         }
 
         // ── Dot growth (coverage-based: expand when 90% ring covered) ────
-        // Throttled to once per 6 frames per dot to keep the O(r²) ring scan cheap.
+        // Incremental coverage counting keeps each check O(1); only ring rebuilds are O(k).
         if (dot.coverageDirty && gs.frameCount % 6 === dotIndex) {
           dot.coverageDirty = false;
-          const innerR = dot.targetRadius;
-          const outerR = dot.targetRadius + DOT_GROWTH_AMOUNT;
-          const innerRSq = innerR * innerR;
-          const outerRSq = outerR * outerR;
-          let totalCells = 0;
-          let coveredCount = 0;
-          const minCX = Math.floor((dot.x - outerR) / CELL_SIZE);
-          const maxCX = Math.floor((dot.x + outerR) / CELL_SIZE);
-          const minCY = Math.floor((dot.y - outerR) / CELL_SIZE);
-          const maxCY = Math.floor((dot.y + outerR) / CELL_SIZE);
-          for (let cx = minCX; cx <= maxCX; cx++) {
-            for (let cy = minCY; cy <= maxCY; cy++) {
-              const px = (cx + 0.5) * CELL_SIZE;
-              const py = (cy + 0.5) * CELL_SIZE;
-              const dSq = (px - dot.x) ** 2 + (py - dot.y) ** 2;
-              if (dSq >= innerRSq && dSq < outerRSq) {
-                totalCells++;
-                if (dot.coveredCells.has(packCell(cx, cy))) coveredCount++;
-              }
-            }
-          }
-          if (totalCells > 0 && coveredCount / totalCells >= COVERAGE_THRESHOLD) {
-            dot.targetRadius = outerR;
+          const totalCells = dot.growthRingCells.size;
+          if (
+            totalCells > 0 &&
+            dot.growthRingCovered / totalCells >= COVERAGE_THRESHOLD
+          ) {
+            dot.targetRadius += DOT_GROWTH_AMOUNT;
+            rebuildGrowthRing(dot);
           }
         }
       }
 
       gs.loopTimeSec = timestamp * 0.001;
       gs.frameCount++;
-      triggerRender();
+      rebuildHeadGrid(gs);
     },
     [width, height, triggerRender],
   );
 
-  useGameLoop(gameLoop, stateRef.current.status === 'playing');
+  useGameLoop(gameLoop, stateRef.current.status === 'playing', 60, 30);
 
   // ─────────────────────────────────────────────────────────────────────────
   // PanResponder — drag-to-connect mechanic
@@ -468,15 +588,13 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           if (distanceSq(prev, newPt) >= POINT_SAMPLE_DISTANCE_SQ) {
             line.pathPoints.push(newPt);
             line.cachedWiggleSvg = null; // invalidate wiggle cache
+            line.cachedWiggleFrame = -1;
             if (line.pathPoints.length > MAX_PATH_POINTS) {
               line.pathPoints = compressPath(line.pathPoints);
             }
             const parentDot = line.dotId === gs.dots[0].id ? gs.dots[0] : gs.dots[1];
             if (parentDot) {
-              parentDot.coveredCells.add(
-                packCell((newPt.x * INV_CELL_SIZE) | 0, (newPt.y * INV_CELL_SIZE) | 0),
-              );
-              parentDot.coverageDirty = true;
+              markCoveredCell(parentDot, newPt.x, newPt.y);
             }
           }
           continue;
@@ -553,16 +671,11 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
                 (l) => l.id !== draggedLine.id && l.id !== snapTarget.id,
               );
               for (const pt of draggedLine.pathPoints) {
-                parentDot.coveredCells.add(
-                  packCell((pt.x * INV_CELL_SIZE) | 0, (pt.y * INV_CELL_SIZE) | 0),
-                );
+                markCoveredCell(parentDot, pt.x, pt.y);
               }
               for (const pt of snapTarget.pathPoints) {
-                parentDot.coveredCells.add(
-                  packCell((pt.x * INV_CELL_SIZE) | 0, (pt.y * INV_CELL_SIZE) | 0),
-                );
+                markCoveredCell(parentDot, pt.x, pt.y);
               }
-              parentDot.coverageDirty = true;
             }
           }
         }
@@ -570,6 +683,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
         gs.draggingMap.delete(id);
         if (lineId) gs.dragStartTime.delete(lineId);
       }
+      rebuildHeadGrid(gs);
     },
     [],
   );
@@ -625,6 +739,8 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
   const handlePlayAgain = useCallback(() => {
     stateRef.current = createInitialState(width, height);
+    _dotSvgCache.clear();
+    headGridRef.current.clear();
     triggerRender();
   }, [width, height, triggerRender]);
 
@@ -714,8 +830,24 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               if (line.connectedToId !== null) continue;
               hasLines = true;
               const isDragging = isLineDragged(line.id);
-              const svgPath = line.cachedWiggleSvg
-                || (line.cachedWiggleSvg = pointsToWiggledSvgPath(line.pathPoints, renderTime, line.wiggleVariant));
+              const pathLen = line.pathPoints.length;
+              const lodStride = pathLen > 220 ? 3 : pathLen > 120 ? 2 : 1;
+              const cadenceDue = gs.frameCount - line.cachedWiggleFrame >= 4;
+              if (
+                !line.cachedWiggleSvg ||
+                line.cachedWiggleStride !== lodStride ||
+                cadenceDue
+              ) {
+                line.cachedWiggleSvg = pointsToWiggledSvgPathLod(
+                  line.pathPoints,
+                  renderTime,
+                  line.wiggleVariant,
+                  lodStride,
+                );
+                line.cachedWiggleFrame = gs.frameCount;
+                line.cachedWiggleStride = lodStride;
+              }
+              const svgPath = line.cachedWiggleSvg;
               // Close-call: head within 20px of any edge → red
               const head = headOf(line);
               const isCloseCall = !isDragging && (head.x < 20 || head.y < 20 || head.x > width - 20 || head.y > height - 20);
@@ -758,15 +890,21 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
           {/* Dots — animated with smooth escape bumps */}
           {gs.dots.map((dot: DotState) => {
+            // Rebuild dot path every 2 frames — bump animation doesn't need 60fps,
+            // and caching lets the GPU reuse the rasterised fill for large dots.
+            const cachedDotPath = _dotSvgCache.get(dot.id);
+            if (cachedDotPath && gs.frameCount % 2 !== 0) {
+              return <Path key={dot.id} d={cachedDotPath} fill="#111111" />;
+            }
             let r = dot.radius;
             // Spawn pulse: 8% scale bump decaying over 300ms
             const pulseElapsed = renderNow - dot.lastSpawnPulseTime;
             if (pulseElapsed < 300 && dot.lastSpawnPulseTime > 0) {
               r *= 1 + 0.08 * (1 - pulseElapsed / 300);
             }
-            const BUMPS = 8;
-            const BUMP_AMP = r * 0.08;
-            const BUMP_SPEED = 3.0;
+            const BUMPS = 5;                          // fewer bumps → rounder, less jittery
+            const BUMP_AMP = Math.min(r * 0.04, 3);   // cap at 3 px so large dots stay smooth
+            const BUMP_SPEED = 1.2;                    // slower oscillation
             const segments = Math.min(36, Math.max(24, Math.round(r * 2)));
             const step = (Math.PI * 2) / segments;
 
@@ -802,6 +940,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             }
             dotParts[n + 1] = 'Z';
             const dotPath = dotParts.join(' ');
+            _dotSvgCache.set(dot.id, dotPath);
             return (
               <Path
                 key={dot.id}

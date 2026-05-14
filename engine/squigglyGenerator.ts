@@ -109,6 +109,29 @@ export function pointsToWiggledSvgPath(points: Point[], time: number, variant: n
 }
 
 /**
+ * LOD wrapper for wiggle path generation.
+ * `stride=1` keeps full detail; larger strides sample fewer interior points.
+ */
+export function pointsToWiggledSvgPathLod(
+  points: Point[],
+  time: number,
+  variant: number = 0,
+  stride: number = 1,
+): string {
+  if (stride <= 1 || points.length <= 4) {
+    return pointsToWiggledSvgPath(points, time, variant);
+  }
+
+  const sampled: Point[] = [points[0]];
+  for (let i = 1; i < points.length - 1; i += stride) {
+    sampled.push(points[i]);
+  }
+  sampled.push(points[points.length - 1]);
+
+  return pointsToWiggledSvgPath(sampled, time, variant);
+}
+
+/**
  * Calculate the total pixel length of a polyline through an array of points.
  */
 export function pathLength(points: Point[]): number {
