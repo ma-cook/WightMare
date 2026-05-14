@@ -1,6 +1,17 @@
 import { Point } from './gameEngine';
 
 /**
+ * Advance a phase accumulator and wrap it to [0, 2π) to keep numbers bounded.
+ */
+export function advancePhase(phase: number, omega: number, dt: number): number {
+  const twoPi = Math.PI * 2;
+  let next = phase + omega * dt;
+  if (next >= twoPi) next -= twoPi;
+  if (next < 0) next += twoPi;
+  return next;
+}
+
+/**
  * Squared Euclidean distance — avoids sqrt for magnitude comparisons.
  */
 export function distanceSq(a: Point, b: Point): number {

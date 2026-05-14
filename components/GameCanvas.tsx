@@ -48,12 +48,14 @@ import {
   createInitialState,
   createLine,
   packCell,
+  recycleLine,
   type DotState,
   type GameState,
   type Point,
   type SquigglyLine,
 } from '../engine/gameEngine';
 import {
+  advancePhase,
   bakeWiggle,
   compressPath,
   distanceSq,
@@ -67,7 +69,6 @@ import HUD from './HUD';
 // ─── Line colour ──────────────────────────────────────────────────────────────
 const LINE_COLOR = '#111111';
 const HEAD_COLOR = '#111111';
-const CONNECTED_COLOR = '#444444';
 
 // ─── Edge margin: how close to the border a head must be to trigger loss ─────
 const EDGE_MARGIN = 4;
@@ -100,6 +101,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
   // ── All mutable game data lives here ─────────────────────────────────────
   const stateRef = useRef<GameState>(createInitialState(width, height));
   const headGridRef = useRef<Map<number, string[]>>(new Map());
+  const pointPoolRef = useRef<Point[]>([]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Helpers
@@ -111,6 +113,49 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
   const headOf = (line: SquigglyLine): Point =>
     line.pathPoints[line.pathPoints.length - 1];
+
+  const allocPoint = (x: number, y: number): Point => {
+    const pool = pointPoolRef.current;
+    const p = pool.pop();
+    if (p) {
+      p.x = x;
+      p.y = y;
+      return p;
+    }
+    return { x, y };
+  };
+
+  const recyclePoint = (point: Point): void => {
+    pointPoolRef.current.push(point);
+  };
+
+  const addLineToDot = (gs: GameState, dot: DotState, line: SquigglyLine): void => {
+    dot.lines.push(line);
+    dot.activeLineIds.push(line.id);
+    gs.lineMap.set(line.id, line);
+    dot.unconnectedCount++;
+  };
+
+  const removeActiveLines = (dot: DotState, idA: string, idB: string): void => {
+    let w = 0;
+    for (let i = 0; i < dot.activeLineIds.length; i++) {
+      const id = dot.activeLineIds[i];
+      if (id !== idA && id !== idB) {
+        dot.activeLineIds[w++] = id;
+      }
+    }
+    dot.activeLineIds.length = w;
+  };
+
+  const recycleRemovedLine = (gs: GameState, lineId: string): void => {
+    const line = gs.lineMap.get(lineId);
+    if (!line) return;
+    for (let i = 0; i < line.pathPoints.length; i++) {
+      recyclePoint(line.pathPoints[i]);
+    }
+    gs.lineMap.delete(lineId);
+    recycleLine(line);
+  };
 
   const markCoveredCell = (dot: DotState, x: number, y: number): void => {
     const key = packCell((x * INV_CELL_SIZE) | 0, (y * INV_CELL_SIZE) | 0);
@@ -170,9 +215,9 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
     grid.clear();
     for (let di = 0; di < gs.dots.length; di++) {
       const dot = gs.dots[di];
-      for (let li = 0; li < dot.lines.length; li++) {
-        const line = dot.lines[li];
-        if (line.connectedToId !== null) continue;
+      for (let li = 0; li < dot.activeLineIds.length; li++) {
+        const line = gs.lineMap.get(dot.activeLineIds[li]);
+        if (!line) continue;
         const head = headOf(line);
         const cell = packCell(
           (head.x * INV_HEAD_GRID_CELL_SIZE) | 0,
@@ -301,10 +346,8 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
                 dot.y + Math.sin(angleB) * dot.radius, now);
               a.partnerId = b.id;
               b.partnerId = a.id;
-              dot.lines.push(a, b);
-              gs.lineMap.set(a.id, a);
-              gs.lineMap.set(b.id, b);
-              dot.unconnectedCount += 2;
+              addLineToDot(gs, dot, a);
+              addLineToDot(gs, dot, b);
               created += 2;
             }
             if (created < toCreate) {
@@ -312,9 +355,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               const single = createLine(dot.id,
                 dot.x + Math.cos(angle) * dot.radius,
                 dot.y + Math.sin(angle) * dot.radius, now);
-              dot.lines.push(single);
-              gs.lineMap.set(single.id, single);
-              dot.unconnectedCount++;
+              addLineToDot(gs, dot, single);
             }
           }
           dot.pendingBatches.length = bw;
@@ -359,10 +400,8 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
                 dot.y + Math.sin(angleB) * dot.radius, now);
               a.partnerId = b.id;
               b.partnerId = a.id;
-              dot.lines.push(a, b);
-              gs.lineMap.set(a.id, a);
-              gs.lineMap.set(b.id, b);
-              dot.unconnectedCount += 2;
+              addLineToDot(gs, dot, a);
+              addLineToDot(gs, dot, b);
             } else {
               dot.pendingBatches.push({ count: 2, spawnAt: now + pi * 150 });
             }
@@ -374,16 +413,19 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               const single = createLine(dot.id,
                 dot.x + Math.cos(angle) * dot.radius,
                 dot.y + Math.sin(angle) * dot.radius, now);
-              dot.lines.push(single);
-              gs.lineMap.set(single.id, single);
-              dot.unconnectedCount++;
+              addLineToDot(gs, dot, single);
             } else {
               dot.pendingBatches.push({ count: 1, spawnAt: now + oddDelay });
             }
           }
         }
 
-        for (const line of dot.lines) {
+        let activeWrite = 0;
+        for (let ai = 0; ai < dot.activeLineIds.length; ai++) {
+          const lineId = dot.activeLineIds[ai];
+          const line = gs.lineMap.get(lineId);
+          if (!line) continue;
+
           // ── Penalty check ────────────────────────────────────────────────
           if (!line.connectedToId && !line.penaltyApplied) {
             if (now - line.spawnTime > CONNECT_PENALTY_WINDOW) {
@@ -398,8 +440,11 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             }
           }
 
-          // ── Skip lines that are connected or being dragged ───────────────
+          // ── Keep only active unconnected ids hot in this list ────────────
           if (line.connectedToId !== null) continue;
+          dot.activeLineIds[activeWrite++] = lineId;
+
+          // ── Skip lines that are being dragged ────────────────────────────
           if (gs.draggingMap.size > 0 && isDragged(line.id)) continue;
 
           // ── Move head ────────────────────────────────────────────────────
@@ -442,20 +487,20 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             }
           }
 
-          // Organic direction change: random wobble + sine component
-          const sineComponent =
-            Math.sin(timestamp * 0.002 + line.numericId) * 0.8;
-          line.direction +=
-            (Math.random() - 0.5) * DIRECTION_WOBBLE * dt + sineComponent * dt;
+          // Organic direction change via phase accumulators (no per-frame RNG).
+          line.wanderPhase = advancePhase(line.wanderPhase, line.wanderOmega, dt);
+          line.direction += Math.sin(line.wanderPhase) * DIRECTION_WOBBLE * 0.85 * dt;
 
           // Escaped lines get stronger wandering so they don't beeline to the edge
           if (escaped) {
-            // Extra wobble — roughly doubles the random turning
-            line.direction += (Math.random() - 0.5) * DIRECTION_WOBBLE * 1.5 * dt;
-            // Periodic sharp turns driven by per-line phase
-            const turnPhase = timestamp * 0.001 + line.numericId * 2.71;
-            line.direction += Math.sin(turnPhase * 1.3) * 2.0 * dt
-                            + Math.cos(turnPhase * 0.7) * 1.5 * dt;
+            line.escapeTurnPhase = advancePhase(
+              line.escapeTurnPhase,
+              line.escapeTurnOmegaA,
+              dt,
+            );
+            const ratio = line.escapeTurnOmegaB / Math.max(line.escapeTurnOmegaA, 0.001);
+            line.direction += Math.sin(line.escapeTurnPhase) * 2.0 * dt
+                            + Math.cos(line.escapeTurnPhase * ratio) * 1.5 * dt;
           }
 
           const speed = LINE_SPEED * dt;
@@ -475,7 +520,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             : line.pathPoints[0];
           if (distanceSq(lastCommitted, newHead) >= POINT_SAMPLE_DISTANCE_SQ) {
             // Push a new live-head slot; the current newHead becomes committed
-            line.pathPoints.push({ ...newHead });
+            line.pathPoints.push(allocPoint(newHead.x, newHead.y));
 
             // Invalidate wiggle cache — will be rebuilt at render time
             line.cachedWiggleSvg = null;
@@ -486,7 +531,11 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
             // Compress if too long (keeps first anchor + last head)
             if (line.pathPoints.length > MAX_PATH_POINTS) {
-              line.pathPoints = compressPath(line.pathPoints);
+              const oldPath = line.pathPoints;
+              for (let i = 1; i < oldPath.length - 1; i += 2) {
+                recyclePoint(oldPath[i]);
+              }
+              line.pathPoints = compressPath(oldPath);
             }
           }
 
@@ -505,6 +554,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             return;
           }
         }
+        dot.activeLineIds.length = activeWrite;
 
         // ── Dot growth (coverage-based: expand when 90% ring covered) ────
         // Incremental coverage counting keeps each check O(1); only ring rebuilds are O(k).
@@ -546,8 +596,9 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
         const id = String(touch.identifier);
 
         if (phase === 'start') {
-          const pt: Point = { x: touch.locationX, y: touch.locationY };
+          const pt = allocPoint(touch.locationX, touch.locationY);
           const target = nearestHead(pt, HIT_RADIUS_SQ);
+          recyclePoint(pt);
           if (target && !gs.draggingMap.has(id)) {
             let alreadyGrabbed = false;
             for (const lineId of gs.draggingMap.values()) {
@@ -567,15 +618,23 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           const line = findLine(lineId);
           if (!line) continue;
 
-          const newPt: Point = { x: touch.locationX, y: touch.locationY };
+          const newX = touch.locationX;
+          const newY = touch.locationY;
           const prev = headOf(line);
+          const dx = prev.x - newX;
+          const dy = prev.y - newY;
 
-          if (distanceSq(prev, newPt) >= POINT_SAMPLE_DISTANCE_SQ) {
+          if (dx * dx + dy * dy >= POINT_SAMPLE_DISTANCE_SQ) {
+            const newPt = allocPoint(newX, newY);
             line.pathPoints.push(newPt);
             line.cachedWiggleSvg = null; // invalidate wiggle cache
             line.cachedWiggleFrame = -1;
             if (line.pathPoints.length > MAX_PATH_POINTS) {
-              line.pathPoints = compressPath(line.pathPoints);
+              const oldPath = line.pathPoints;
+              for (let i = 1; i < oldPath.length - 1; i += 2) {
+                recyclePoint(oldPath[i]);
+              }
+              line.pathPoints = compressPath(oldPath);
             }
             const parentDot = line.dotId === gs.dots[0].id ? gs.dots[0] : gs.dots[1];
             if (parentDot) {
@@ -591,16 +650,14 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
         const draggedLine = findLine(lineId);
         if (draggedLine) {
-          const relPt: Point = {
-            x: touch.locationX,
-            y: touch.locationY,
-          };
+          const relPt = allocPoint(touch.locationX, touch.locationY);
           const snapTarget = nearestHead(
             relPt,
             SNAP_RADIUS_SQ,
             draggedLine.id,
             draggedLine.dotId,
           );
+          recyclePoint(relPt);
 
           if (snapTarget) {
             draggedLine.connectedToId = snapTarget.id;
@@ -634,33 +691,34 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               gs.connectionCount++;
             }
             const snapHead = headOf(snapTarget);
-            draggedLine.pathPoints[draggedLine.pathPoints.length - 1] = {
-              ...snapHead,
-            };
+            const draggedHead = draggedLine.pathPoints[draggedLine.pathPoints.length - 1];
+            draggedHead.x = snapHead.x;
+            draggedHead.y = snapHead.y;
             const t = gs.loopTimeSec;
             bakeWiggle(draggedLine.pathPoints, t, draggedLine.wiggleVariant);
             bakeWiggle(snapTarget.pathPoints, t, snapTarget.wiggleVariant);
             draggedLine.cachedSvgPath = pointsToSvgPath(draggedLine.pathPoints);
             snapTarget.cachedSvgPath = pointsToSvgPath(snapTarget.pathPoints);
             if (parentDot) {
-              parentDot.connectedPaths.push(draggedLine.cachedSvgPath, snapTarget.cachedSvgPath);
-              parentDot.connectedSvgDirty = true;
-              // Push connection pulse flashes for both paths
-              const pulseNow = Date.now();
-              parentDot.connectionFlashes.push(
-                { svgPath: draggedLine.cachedSvgPath, startTime: pulseNow },
-                { svgPath: snapTarget.cachedSvgPath, startTime: pulseNow },
-              );
-              // Remove connected lines from dot.lines to stop iterating them each frame
-              parentDot.lines = parentDot.lines.filter(
-                (l) => l.id !== draggedLine.id && l.id !== snapTarget.id,
-              );
+              removeActiveLines(parentDot, draggedLine.id, snapTarget.id);
               for (const pt of draggedLine.pathPoints) {
                 markCoveredCell(parentDot, pt.x, pt.y);
               }
               for (const pt of snapTarget.pathPoints) {
                 markCoveredCell(parentDot, pt.x, pt.y);
               }
+
+              // Remove from storage arrays and recycle objects for reuse.
+              let w = 0;
+              for (let li = 0; li < parentDot.lines.length; li++) {
+                const l = parentDot.lines[li];
+                if (l.id !== draggedLine.id && l.id !== snapTarget.id) {
+                  parentDot.lines[w++] = l;
+                }
+              }
+              parentDot.lines.length = w;
+              recycleRemovedLine(gs, draggedLine.id);
+              recycleRemovedLine(gs, snapTarget.id);
             }
           }
         }
@@ -723,6 +781,10 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
   // ─────────────────────────────────────────────────────────────────────────
 
   const handlePlayAgain = useCallback(() => {
+    const gs = stateRef.current;
+    for (const lineId of gs.lineMap.keys()) {
+      recycleRemovedLine(gs, lineId);
+    }
     stateRef.current = createInitialState(width, height);
     _dotSvgCache.clear();
     headGridRef.current.clear();
@@ -757,49 +819,6 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
         onTouchCancel={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'end')}
       >
         <Svg width={width} height={height} style={styles.svg}>
-          {/* Connected lines — one single <Path> per dot for all connected lines */}
-          {gs.dots.map((dot: DotState) => {
-            // Lazily rebuild the joined SVG string when new paths were added
-            if (dot.connectedSvgDirty) {
-              dot.cachedConnectedSvg = dot.connectedPaths.join(' ');
-              dot.connectedSvgDirty = false;
-            }
-            return dot.cachedConnectedSvg ? (
-              <Path
-                key={`${dot.id}-connected`}
-                d={dot.cachedConnectedSvg}
-                stroke={CONNECTED_COLOR}
-                strokeWidth={6}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ) : null;
-          })}
-          {/* Connection pulse flashes — bright flash along connected paths */}
-          {gs.dots.map((dot: DotState) => {
-            const pulseNow = renderNow;
-            // In-place compaction — avoids allocating a new array via .filter()
-            let fw = 0;
-            for (let fi = 0; fi < dot.connectionFlashes.length; fi++) {
-              if (pulseNow - dot.connectionFlashes[fi].startTime < 200) {
-                dot.connectionFlashes[fw++] = dot.connectionFlashes[fi];
-              }
-            }
-            dot.connectionFlashes.length = fw;
-            return fw > 0 ? (
-              <Path
-                key={`${dot.id}-pulse`}
-                d={dot.connectionFlashes.map(f => f.svgPath).join(' ')}
-                stroke="#888888"
-                strokeWidth={8}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                opacity={Math.max(0, 1 - (pulseNow - dot.connectionFlashes[0].startTime) / 200)}
-              />
-            ) : null;
-          })}
           {/* Active (unconnected) lines — batched into merged <Path> per dot */}
           {gs.dots.map((dot: DotState) => {
             let linePaths = '';
@@ -811,8 +830,9 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             let dragInnerD = '';
             let hasLines = false;
 
-            for (const line of dot.lines) {
-              if (line.connectedToId !== null) continue;
+            for (let i = 0; i < dot.activeLineIds.length; i++) {
+              const line = gs.lineMap.get(dot.activeLineIds[i]);
+              if (!line) continue;
               hasLines = true;
               const isDragging = isLineDragged(line.id);
               const pathLen = line.pathPoints.length;

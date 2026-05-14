@@ -15,6 +15,16 @@ export interface SquigglyLine {
   pathPoints: Point[];
   /** Current movement direction in radians. */
   direction: number;
+  /** Phase for gentle wander steering. */
+  wanderPhase: number;
+  /** Angular frequency for wander phase. */
+  wanderOmega: number;
+  /** Phase for escaped turning behaviour. */
+  escapeTurnPhase: number;
+  /** Primary angular frequency for escaped turning behaviour. */
+  escapeTurnOmegaA: number;
+  /** Secondary angular frequency for escaped turning behaviour. */
+  escapeTurnOmegaB: number;
   /** Connected to another line's id, or null. */
   connectedToId: string | null;
   /** Timestamp when this line was spawned (ms). */
@@ -74,6 +84,8 @@ export interface DotState {
   pendingBatches: Array<{ count: number; spawnAt: number }>;
   /** Count of unconnected lines — maintained incrementally to avoid filter() each frame. */
   unconnectedCount: number;
+  /** Active unconnected line ids for this dot (hot-path iteration). */
+  activeLineIds: string[];
   /** Cells belonging to the next growth ring around this dot. */
   growthRingCells: Set<number>;
   /** Number of growth-ring cells currently covered. */
@@ -192,6 +204,11 @@ export function packCell(cx: number, cy: number): number {
 // ─── Factory helpers ─────────────────────────────────────────────────────────
 
 let _lineCounter = Date.now();
+const _linePool: SquigglyLine[] = [];
+
+function randomRange(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
 
 export function createLine(
   dotId: string,
@@ -200,6 +217,33 @@ export function createLine(
   now: number,
 ): SquigglyLine {
   _lineCounter += 1;
+  const line = _linePool.pop();
+  const direction = Math.random() * Math.PI * 2;
+  if (line) {
+    line.id = `line-${_lineCounter}`;
+    line.numericId = _lineCounter;
+    line.dotId = dotId;
+    line.partnerId = null;
+    line.pathPoints.length = 0;
+    line.pathPoints.push({ x: dotX, y: dotY }, { x: dotX, y: dotY });
+    line.direction = direction;
+    line.wanderPhase = Math.random() * Math.PI * 2;
+    line.wanderOmega = randomRange(1.2, 2.4);
+    line.escapeTurnPhase = Math.random() * Math.PI * 2;
+    line.escapeTurnOmegaA = randomRange(0.8, 1.8);
+    line.escapeTurnOmegaB = randomRange(0.5, 1.2);
+    line.connectedToId = null;
+    line.spawnTime = now;
+    line.penaltyApplied = false;
+    line.cachedSvgPath = null;
+    line.cachedWiggleSvg = null;
+    line.cachedWiggleFrame = -1;
+    line.cachedWiggleLen = 0;
+    line.cachedWiggleStride = 1;
+    line.wiggleVariant = (Math.random() * 3) | 0;
+    return line;
+  }
+
   return {
     id: `line-${_lineCounter}`,
     numericId: _lineCounter,
@@ -207,7 +251,12 @@ export function createLine(
     partnerId: null,
     // Two points: fixed anchor at dot + live head (same position initially)
     pathPoints: [{ x: dotX, y: dotY }, { x: dotX, y: dotY }],
-    direction: Math.random() * Math.PI * 2,
+    direction,
+    wanderPhase: Math.random() * Math.PI * 2,
+    wanderOmega: randomRange(1.2, 2.4),
+    escapeTurnPhase: Math.random() * Math.PI * 2,
+    escapeTurnOmegaA: randomRange(0.8, 1.8),
+    escapeTurnOmegaB: randomRange(0.5, 1.2),
     connectedToId: null,
     spawnTime: now,
     penaltyApplied: false,
@@ -218,6 +267,18 @@ export function createLine(
     cachedWiggleStride: 1,
     wiggleVariant: (Math.random() * 3) | 0,
   };
+}
+
+export function recycleLine(line: SquigglyLine): void {
+  line.connectedToId = null;
+  line.partnerId = null;
+  line.cachedSvgPath = null;
+  line.cachedWiggleSvg = null;
+  line.cachedWiggleFrame = -1;
+  line.cachedWiggleLen = 0;
+  line.cachedWiggleStride = 1;
+  line.pathPoints.length = 0;
+  _linePool.push(line);
 }
 
 export function createInitialState(width: number, height: number): GameState {
@@ -261,6 +322,7 @@ export function createInitialState(width: number, height: number): GameState {
         growStartRadius: INITIAL_DOT_RADIUS,
         pendingBatches: [],
         unconnectedCount: 0,
+        activeLineIds: [],
         growthRingCells: new Set<number>(),
         growthRingCovered: 0,
         _dotBuf: new Float64Array(72),
@@ -292,6 +354,7 @@ export function createInitialState(width: number, height: number): GameState {
         growStartRadius: INITIAL_DOT_RADIUS,
         pendingBatches: [],
         unconnectedCount: 0,
+        activeLineIds: [],
         growthRingCells: new Set<number>(),
         growthRingCovered: 0,
         _dotBuf: new Float64Array(72),
