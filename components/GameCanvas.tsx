@@ -1001,48 +1001,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             return <Path key={`${dot.id}-combo`} d={d} fill="#8B0000" />;
           })}
 
-          {/* Writhing flecks inside each dot — cached, recomputed every 4 render frames */}
-          {gs.dots.map((dot: DotState, dotIdx: number) => {
-            const r = dot.radius;
-            if (r < 18) return null;
-            // Recompute fleck path every 4th frame (~8fps visual update, imperceptible)
-            if (gs.frameCount - dot.cachedFleckFrame >= 4 || !dot.cachedFleckSvg) {
-              dot.cachedFleckFrame = gs.frameCount;
-              const FLECK_COUNT = Math.min(15, Math.max(1, Math.floor((r - 15) / 2.5)));
-              const fleckParts: string[] = [];
-              for (let i = 0; i < FLECK_COUNT; i++) {
-                const phase = i * 1.618 + dotIdx * 2.4;
-                const blinkCycle = Math.sin(renderTime * (0.18 + i * 0.055) + phase * 2.1)
-                                 * Math.cos(renderTime * (0.32 + i * 0.085) + phase * 1.3);
-                if (blinkCycle < 0) continue;
-                const rot = renderTime * (0.22 + i * 0.03) + phase;
-                const radFrac = 0.15 + 0.55 * ((Math.sin(phase * 1.3) + 1) / 2);
-                const ox = dot.x + Math.cos(rot) * r * radFrac;
-                const oy = dot.y + Math.sin(rot) * r * radFrac;
-                const len = r * (0.12 + 0.14 * Math.abs(Math.sin(renderTime * 0.65 + phase)));
-                const sweep = rot + 0.9 + Math.sin(renderTime * 0.8 + phase) * 0.6;
-                const ctrl = rot + 0.45 + Math.sin(renderTime * 1.0 + phase) * 0.4;
-                const ex = ox + Math.cos(sweep) * len;
-                const ey = oy + Math.sin(sweep) * len;
-                const qx = ox + Math.cos(ctrl) * len * 0.7;
-                const qy = oy + Math.sin(ctrl) * len * 0.7;
-                fleckParts.push(`M ${Math.round(ox)} ${Math.round(oy)} Q ${Math.round(qx)} ${Math.round(qy)} ${Math.round(ex)} ${Math.round(ey)}`);
-              }
-              dot.cachedFleckSvg = fleckParts.join(' ');
-              dot.cachedFleckOpacity = 0.15 + 0.35 * ((Math.sin(renderTime * 0.4 + dotIdx * 1.5) + 1) / 2);
-            }
-            if (!dot.cachedFleckSvg) return null;
-            return (
-              <Path
-                key={`${dot.id}-flecks`}
-                d={dot.cachedFleckSvg}
-                stroke="#777777"
-                strokeWidth={1}
-                fill="none"
-                opacity={dot.cachedFleckOpacity}
-              />
-            );
-          })}
+
         </Svg>
       </View>
 
