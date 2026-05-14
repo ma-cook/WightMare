@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Animated,
   AppState,
   Dimensions,
   Linking,
@@ -26,6 +27,48 @@ import Svg, { Path } from 'react-native-svg';
 const STORAGE_KEY = 'wightmare_gamertag';
 const PB_STORAGE_KEY = 'wightmare_personal_best';
 
+// True when running on a touch-only device in a web browser
+const isMobileWeb =
+  Platform.OS === 'web' &&
+  typeof window !== 'undefined' &&
+  window.matchMedia?.('(pointer: coarse)').matches === true;
+
+const RotatePrompt = React.memo(function RotatePrompt() {
+  const rotateAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.delay(500),
+        Animated.timing(rotateAnim, { toValue: 1, duration: 700, useNativeDriver: true }),
+        Animated.delay(600),
+        Animated.timing(rotateAnim, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ])
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [rotateAnim]);
+
+  const rotate = rotateAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '-90deg'],
+  });
+
+  return (
+    <View style={rotateStyles.overlay}>
+      <Animated.View style={{ transform: [{ rotate }] }}>
+        <Svg width={80} height={80} viewBox="0 0 24 24">
+          <Path
+            d="M17 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-5 18.5a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1zM17 17H7V6h10v11z"
+            fill="#111111"
+          />
+        </Svg>
+      </Animated.View>
+      <Text style={rotateStyles.text}>Rotate your phone to play</Text>
+    </View>
+  );
+});
+
 export default function App() {
   const [ready, setReady] = useState(Platform.OS === 'web');
   const [screen, setScreen] = useState<'menu' | 'nameEntry' | 'game'>('menu');
@@ -39,6 +82,12 @@ export default function App() {
       width: Math.max(width, height),
       height: Math.min(width, height),
     };
+  });
+
+  const [isPortrait, setIsPortrait] = useState(() => {
+    if (Platform.OS !== 'web') return false;
+    const { width, height } = Dimensions.get('window');
+    return height > width;
   });
 
   // Load cached gamertag and personal best
@@ -70,30 +119,6 @@ export default function App() {
     }
   }, []);
 
-  // Force landscape on mobile web: inject CSS that rotates the page when the
-  // device is in portrait orientation.  Uses pointer/hover media features to
-  // target touch-only devices and leave desktop browsers unaffected.
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-    if (typeof document === 'undefined') return;
-    const style = document.createElement('style');
-    style.textContent =
-      '@media screen and (orientation: portrait) and (hover: none) and (pointer: coarse) {' +
-      '  html {' +
-      '    transform: rotate(-90deg);' +
-      '    transform-origin: left top;' +
-      '    width: 100vh;' +
-      '    height: 100vw;' +
-      '    overflow: hidden;' +
-      '    position: fixed;' +
-      '    top: 100%;' +
-      '    left: 0;' +
-      '  }' +
-      '}';
-    document.head.appendChild(style);
-    return () => { document.head.removeChild(style); };
-  }, []);
-
   // Listen for dimension changes
   useEffect(() => {
     const subscription = Dimensions.addEventListener('change', ({ window }) => {
@@ -101,6 +126,7 @@ export default function App() {
         width: Math.max(window.width, window.height),
         height: Math.min(window.width, window.height),
       });
+      if (Platform.OS === 'web') setIsPortrait(window.height > window.width);
     });
     return () => subscription.remove();
   }, []);
@@ -167,6 +193,9 @@ export default function App() {
         <SquigglyTitle maxWidth={400} />
       </View>
     );
+
+  if (isMobileWeb && isPortrait)
+    return <RotatePrompt />;
 
   if (screen === 'menu' || screen === 'nameEntry')
     return (
@@ -299,6 +328,22 @@ function ApkDownload() {
     </View>
   );
 }
+
+const rotateStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: '#faecdb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 28,
+  },
+  text: {
+    fontSize: 18,
+    color: '#111111',
+    fontFamily: Platform.OS === 'web' ? 'Georgia, "Times New Roman", serif' : 'serif',
+    textAlign: 'center',
+  },
+});
 
 const apkStyles = StyleSheet.create({
   container: {

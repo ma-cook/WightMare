@@ -208,13 +208,13 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           // Spawn count scales with total connections.
           // Desktop web: 4 → 6 → 8 → 10. Mobile/native: 2 → 4 → 6 → 8.
           const spawnCount = isDesktopWeb
-            ? (gs.totalConnected >= 226 ? 10
-              : gs.totalConnected >= 151 ? 8
-              : gs.totalConnected >= 76 ? 6
+            ? (gs.totalConnected >= 125 ? 10
+              : gs.totalConnected >= 75 ? 8
+              : gs.totalConnected >= 25 ? 6
               : 4)
-            : (gs.totalConnected >= 225 ? 8
-              : gs.totalConnected >= 150 ? 6
-              : gs.totalConnected >= 75 ? 4
+            : (gs.totalConnected >= 125 ? 8
+              : gs.totalConnected >= 75 ? 6
+              : gs.totalConnected >= 25 ? 4
               : 2);
           // Cap unconnected lines per dot
           const allowed = Math.max(0, MAX_UNCONNECTED_PER_DOT - dot.unconnectedCount);
