@@ -21,7 +21,7 @@ import GameCanvas from './components/GameCanvas';
 import Leaderboard from './components/Leaderboard';
 import SquigglyTitle, { SquigglyText, AnimatedDotWrapper } from './components/SquigglyTitle';
 import { fetchTopScores, type LeaderboardEntry } from './services/leaderboard';
-import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 
 const STORAGE_KEY = 'wightmare_gamertag';
 const PB_STORAGE_KEY = 'wightmare_personal_best';
@@ -68,6 +68,30 @@ export default function App() {
         () => setReady(true),
       );
     }
+  }, []);
+
+  // Force landscape on mobile web: inject CSS that rotates the page when the
+  // device is in portrait orientation.  Uses pointer/hover media features to
+  // target touch-only devices and leave desktop browsers unaffected.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (typeof document === 'undefined') return;
+    const style = document.createElement('style');
+    style.textContent =
+      '@media screen and (orientation: portrait) and (hover: none) and (pointer: coarse) {' +
+      '  html {' +
+      '    transform: rotate(-90deg);' +
+      '    transform-origin: left top;' +
+      '    width: 100vh;' +
+      '    height: 100vw;' +
+      '    overflow: hidden;' +
+      '    position: fixed;' +
+      '    top: 100%;' +
+      '    left: 0;' +
+      '  }' +
+      '}';
+    document.head.appendChild(style);
+    return () => { document.head.removeChild(style); };
   }, []);
 
   // Listen for dimension changes
@@ -148,16 +172,6 @@ export default function App() {
     return (
       <View style={styles.menu}>
         <StatusBar hidden />
-        {/* Gradient background */}
-        <Svg width={dimensions.width} height={dimensions.height} style={StyleSheet.absoluteFill} pointerEvents="none">
-          <Defs>
-            <LinearGradient id="menu-bg" x1="0" y1="0" x2="1" y2="0">
-              <Stop offset="0" stopColor="#EDE5DA" />
-              <Stop offset="1" stopColor="#FFFFFF" />
-            </LinearGradient>
-          </Defs>
-          <Rect x="0" y="0" width={dimensions.width} height={dimensions.height} fill="url(#menu-bg)" />
-        </Svg>
 
         {/* 3-column landscape layout */}
         <View style={styles.menuColumns}>
@@ -325,7 +339,7 @@ const styles = StyleSheet.create({
 
   menu: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#faecdb',
   },
   menuColumns: {
     flex: 1,

@@ -18,7 +18,7 @@ import {
   View,
   type NativeTouchEvent,
 } from 'react-native';
-import Svg, { Defs, LinearGradient, Stop, Rect, Path } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 
 import {
   CELL_SIZE,
@@ -78,40 +78,16 @@ interface Props {
   onReturnToMenu: (survivalTime?: number) => void;
 }
 
-// ─── Memoized gradient background — only re-renders when warm side flips ────
-const GradientBackground = React.memo(function GradientBackground({
-  width,
-  height,
-  leftLarger,
-}: {
-  width: number;
-  height: number;
-  leftLarger: boolean;
-}) {
-  return (
-    <Svg
-      width={width}
-      height={height}
-      style={[StyleSheet.absoluteFill, { zIndex: 0 }]}
-      pointerEvents="none"
-    >
-      <Defs>
-        <LinearGradient id="bg-grad" x1="0" y1="0" x2="1" y2="0">
-          <Stop offset="0" stopColor={leftLarger ? '#faecdb' : '#FFFFFF'} />
-          <Stop offset="1" stopColor={leftLarger ? '#FFFFFF' : '#faecdb'} />
-        </LinearGradient>
-      </Defs>
-      <Rect x="0" y="0" width={width} height={height} fill="url(#bg-grad)" />
-    </Svg>
-  );
-});
+// True when running in a desktop web browser (not a touch/mobile device)
+const isDesktopWeb =
+  Platform.OS === 'web' &&
+  typeof window !== 'undefined' &&
+  window.matchMedia?.('(pointer: fine)').matches === true;
 
 export default function GameCanvas({ width, height, playerName, personalBest, onReturnToMenu }: Props) {
   // ── React state: only used to trigger re-renders ──────────────────────────
   const [renderTick, setRenderTick] = useState(0);
   const triggerRender = useCallback(() => setRenderTick((t) => t + 1), []);
-  const [leftLarger, setLeftLarger] = useState(true);
-  const leftLargerRef = useRef(true);
 
   // ── All mutable game data lives here ─────────────────────────────────────
   const stateRef = useRef<GameState>(createInitialState(width, height));
@@ -229,11 +205,17 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             SPAWN_INTERVAL_MIN +
             Math.random() * (SPAWN_INTERVAL_MAX - SPAWN_INTERVAL_MIN);
 
-          // Spawn count scales with total connections: 2 base, +2 at 75, +4 at 150, +6 at 225
-          const spawnCount = gs.totalConnected >= 225 ? 8
-            : gs.totalConnected >= 150 ? 6
-            : gs.totalConnected >= 75 ? 4
-            : 2;
+          // Spawn count scales with total connections.
+          // Desktop web: 4 → 6 → 8 → 10. Mobile/native: 2 → 4 → 6 → 8.
+          const spawnCount = isDesktopWeb
+            ? (gs.totalConnected >= 226 ? 10
+              : gs.totalConnected >= 151 ? 8
+              : gs.totalConnected >= 76 ? 6
+              : 4)
+            : (gs.totalConnected >= 225 ? 8
+              : gs.totalConnected >= 150 ? 6
+              : gs.totalConnected >= 75 ? 4
+              : 2);
           // Cap unconnected lines per dot
           const allowed = Math.max(0, MAX_UNCONNECTED_PER_DOT - dot.unconnectedCount);
 
@@ -646,18 +628,8 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
     return false;
   };
 
-  // Determine which side gets the warm tone based on which dot is larger
-  const leftDot = gs.dots[0];
-  const rightDot = gs.dots[1];
-  const nextLeftLarger = leftDot && rightDot ? leftDot.targetRadius >= rightDot.targetRadius : true;
-  if (nextLeftLarger !== leftLargerRef.current) {
-    leftLargerRef.current = nextLeftLarger;
-    setLeftLarger(nextLeftLarger);
-  }
-
   return (
     <View style={styles.container}>
-      <GradientBackground width={width} height={height} leftLarger={leftLarger} />
       {/* Touch / mouse capture layer */}
       <View
         ref={touchLayerRef}
@@ -940,7 +912,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#faecdb',
   },
   touchLayer: {
     position: 'absolute',
