@@ -39,6 +39,7 @@ import {
   MAX_PATH_POINTS,
   MAX_UNCONNECTED_PER_DOT,
   POINT_SAMPLE_DISTANCE_SQ,
+  OUTWARD_BIAS,
   RETURN_FORCE,
   SNAP_RADIUS_SQ,
   SPAWN_INTERVAL_DECREASE,
@@ -344,6 +345,8 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               const b = createLine(dot.id,
                 dot.x + Math.cos(angleB) * dot.radius,
                 dot.y + Math.sin(angleB) * dot.radius, now);
+              a.direction = angleA;
+              b.direction = angleB;
               a.partnerId = b.id;
               b.partnerId = a.id;
               addLineToDot(gs, dot, a);
@@ -355,6 +358,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               const single = createLine(dot.id,
                 dot.x + Math.cos(angle) * dot.radius,
                 dot.y + Math.sin(angle) * dot.radius, now);
+              single.direction = angle;
               addLineToDot(gs, dot, single);
             }
           }
@@ -398,6 +402,8 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               const b = createLine(dot.id,
                 dot.x + Math.cos(angleB) * dot.radius,
                 dot.y + Math.sin(angleB) * dot.radius, now);
+              a.direction = angleA;
+              b.direction = angleB;
               a.partnerId = b.id;
               b.partnerId = a.id;
               addLineToDot(gs, dot, a);
@@ -413,6 +419,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               const single = createLine(dot.id,
                 dot.x + Math.cos(angle) * dot.radius,
                 dot.y + Math.sin(angle) * dot.radius, now);
+              single.direction = angle;
               addLineToDot(gs, dot, single);
             } else {
               dot.pendingBatches.push({ count: 1, spawnAt: now + oddDelay });
@@ -474,8 +481,14 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             const exploreInner = exploreR * 0.3;
             const exploreRange = exploreR * 0.7;
             const exploreInnerSq = exploreInner * exploreInner;
+            const distToDot = Math.sqrt(distToDotSq);
+            // Outward bias — nudges lines away from the dot centre (strongest close in, fades to 0 at explore edge)
+            const outwardFrac = Math.max(0, 1 - distToDot / exploreR);
+            const angleAway = Math.atan2(-dotDy, -dotDx);
+            let outDiff = angleAway - line.direction;
+            outDiff = ((outDiff + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
+            line.direction += outDiff * OUTWARD_BIAS * outwardFrac * dt;
             if (distToDotSq > exploreInnerSq) {
-              const distToDot = Math.sqrt(distToDotSq);
               const angleToCenter = Math.atan2(dotDy, dotDx);
               let angleDiff = angleToCenter - line.direction;
               angleDiff = ((angleDiff + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
