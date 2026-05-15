@@ -79,6 +79,15 @@ const EDGE_MARGIN = 4;
 // the rasterised fill more often, which is the main cost at large radii).
 const _dotSvgCache = new Map<string, string>();
 const _ringOffsetsCache = new Map<number, Array<[number, number]>>();
+// Reusable string-part buffers — cleared per dot render pass to avoid per-frame allocations.
+const _linePathParts: string[] = [];
+const _closeCallParts: string[] = [];
+const _outerCircleParts: string[] = [];
+const _innerCircleParts: string[] = [];
+const _dragOuterParts: string[] = [];
+const _dragInnerParts: string[] = [];
+// Reusable bucket pool for the head spatial grid.
+const _bucketPool: string[][] = [];
 
 interface Props {
   width: number;
@@ -213,6 +222,12 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
   const rebuildHeadGrid = (gs: GameState): void => {
     const grid = headGridRef.current;
+    // Return existing buckets to pool before clearing to avoid allocating a
+    // new single-element array for every occupied cell on every sim tick.
+    for (const bucket of grid.values()) {
+      bucket.length = 0;
+      _bucketPool.push(bucket);
+    }
     grid.clear();
     for (let di = 0; di < gs.dots.length; di++) {
       const dot = gs.dots[di];
@@ -224,11 +239,13 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           (head.x * INV_HEAD_GRID_CELL_SIZE) | 0,
           (head.y * INV_HEAD_GRID_CELL_SIZE) | 0,
         );
-        const bucket = grid.get(cell);
-        if (bucket) {
-          bucket.push(line.id);
+        const existing = grid.get(cell);
+        if (existing) {
+          existing.push(line.id);
         } else {
-          grid.set(cell, [line.id]);
+          const bucket = _bucketPool.pop() ?? [];
+          bucket.push(line.id);
+          grid.set(cell, bucket);
         }
       }
     }
@@ -375,17 +392,13 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             SPAWN_INTERVAL_MIN +
             Math.random() * (SPAWN_INTERVAL_MAX - SPAWN_INTERVAL_MIN);
 
-          // Spawn count scales with total connections.
-          // Desktop web: 4 → 6 → 8 → 10. Mobile/native: 2 → 4 → 6 → 8.
-          const spawnCount = isDesktopWeb
-            ? (gs.totalConnected >= 125 ? 10
-              : gs.totalConnected >= 75 ? 8
-              : gs.totalConnected >= 25 ? 6
-              : 4)
-            : (gs.totalConnected >= 125 ? 10
-              : gs.totalConnected >= 75 ? 8
-              : gs.totalConnected >= 25 ? 6
-              : 4);
+          // Spawn count scales with total connections: 4 → 8 → 12 → 16 → 20 per dot.
+          const spawnCount =
+            gs.totalConnected >= 200 ? 20
+            : gs.totalConnected >= 125 ? 16
+            : gs.totalConnected >= 75 ? 12
+            : gs.totalConnected >= 25 ? 8
+            : 4;
           // Cap unconnected lines per dot
           const allowed = Math.max(0, MAX_UNCONNECTED_PER_DOT - dot.unconnectedCount);
 
@@ -858,13 +871,13 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
           {/* Active (unconnected) lines — batched into merged <Path> per dot */}
           {gs.dots.map((dot: DotState) => {
-            let linePaths = '';
-            let closeCallD = '';
-            let outerD = '';
-            let innerD = '';
+            _linePathParts.length = 0;
+            _closeCallParts.length = 0;
+            _outerCircleParts.length = 0;
+            _innerCircleParts.length = 0;
+            _dragOuterParts.length = 0;
+            _dragInnerParts.length = 0;
             let hasDragging = false;
-            let dragOuterD = '';
-            let dragInnerD = '';
             let hasLines = false;
 
             for (let i = 0; i < dot.activeLineIds.length; i++) {
@@ -874,7 +887,9 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               const isDragging = isLineDragged(line.id);
               const pathLen = line.pathPoints.length;
               const lodStride = pathLen > 220 ? 3 : pathLen > 120 ? 2 : 1;
-              const cadenceDue = gs.frameCount - line.cachedWiggleFrame >= 4;
+              // Longer paths animate less frequently — they are less sensitive to wiggle refresh.
+              const cadence = pathLen > 150 ? 12 : 8;
+              const cadenceDue = gs.frameCount - line.cachedWiggleFrame >= cadence;
               if (
                 !line.cachedWiggleSvg ||
                 line.cachedWiggleStride !== lodStride ||
@@ -894,9 +909,9 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               const head = headOf(line);
               const isCloseCall = !isDragging && (head.x < 20 || head.y < 20 || head.x > width - 20 || head.y > height - 20);
               if (isCloseCall) {
-                closeCallD += (closeCallD ? ' ' : '') + svgPath;
+                _closeCallParts.push(svgPath);
               } else {
-                linePaths += (linePaths ? ' ' : '') + svgPath;
+                _linePathParts.push(svgPath);
               }
               const hx = Math.round(head.x);
               const hy = Math.round(head.y);
@@ -907,16 +922,22 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
                 const sizeMult = Math.pow(2, heldSec);
                 const outerR = Math.round(9 * sizeMult * 10) / 10;
                 const innerR = Math.round(4 * sizeMult * 10) / 10;
-                dragOuterD += `M ${hx - outerR} ${hy} a ${outerR} ${outerR} 0 1 0 ${outerR * 2} 0 a ${outerR} ${outerR} 0 1 0 -${outerR * 2} 0`;
-                dragInnerD += `M ${hx - innerR} ${hy} a ${innerR} ${innerR} 0 1 0 ${innerR * 2} 0 a ${innerR} ${innerR} 0 1 0 -${innerR * 2} 0`;
+                _dragOuterParts.push(`M ${hx - outerR} ${hy} a ${outerR} ${outerR} 0 1 0 ${outerR * 2} 0 a ${outerR} ${outerR} 0 1 0 -${outerR * 2} 0`);
+                _dragInnerParts.push(`M ${hx - innerR} ${hy} a ${innerR} ${innerR} 0 1 0 ${innerR * 2} 0 a ${innerR} ${innerR} 0 1 0 -${innerR * 2} 0`);
               } else {
-                outerD += `M ${hx - 6} ${hy} a 6 6 0 1 0 12 0 a 6 6 0 1 0 -12 0`;
-                innerD += `M ${hx - 2.5} ${hy} a 2.5 2.5 0 1 0 5 0 a 2.5 2.5 0 1 0 -5 0`;
+                _outerCircleParts.push(`M ${hx - 6} ${hy} a 6 6 0 1 0 12 0 a 6 6 0 1 0 -12 0`);
+                _innerCircleParts.push(`M ${hx - 2.5} ${hy} a 2.5 2.5 0 1 0 5 0 a 2.5 2.5 0 1 0 -5 0`);
               }
             }
 
             if (!hasLines) return null;
             const innerColor = dot.id === 'dot-left' ? '#ffffff' : '#bbbbbb';
+            const linePaths = _linePathParts.join(' ');
+            const closeCallD = _closeCallParts.join(' ');
+            const outerD = _outerCircleParts.join(' ');
+            const innerD = _innerCircleParts.join(' ');
+            const dragOuterD = _dragOuterParts.join(' ');
+            const dragInnerD = _dragInnerParts.join(' ');
 
             return (
               <React.Fragment key={`${dot.id}-active`}>
@@ -935,7 +956,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             // Rebuild dot path every 2 frames — bump animation doesn't need 60fps,
             // and caching lets the GPU reuse the rasterised fill for large dots.
             const cachedDotPath = _dotSvgCache.get(dot.id);
-            if (cachedDotPath && gs.frameCount % 2 !== 0) {
+            if (cachedDotPath && gs.frameCount % 4 !== 0) {
               return <Path key={dot.id} d={cachedDotPath} fill="#111111" />;
             }
             let r = dot.radius;

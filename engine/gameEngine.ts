@@ -151,7 +151,7 @@ export const SPAWN_INTERVAL_INCREASE = 500;
 /** After this many ms, an unconnected line escapes its explore zone (ms). */
 export const ESCAPE_TIME = 5000;
 /** Max unconnected lines per dot. */
-export const MAX_UNCONNECTED_PER_DOT = 12;
+export const MAX_UNCONNECTED_PER_DOT = 20;
 /** Duration of dot growth animation (ms). */
 export const DOT_GROW_DURATION = 3000;
 /** Spawn interval speedup (ms) when this dot is larger than the other. */
@@ -166,9 +166,9 @@ export const HIT_RADIUS = 36;
 /** Snap-to-connect radius when releasing a drag (px). */
 export const SNAP_RADIUS = 50;
 /** Maximum number of points stored per line (older ones are compressed). */
-export const MAX_PATH_POINTS = 400;
+export const MAX_PATH_POINTS = 250;
 /** Sample a new path point every N pixels of head movement. */
-export const POINT_SAMPLE_DISTANCE = 5;
+export const POINT_SAMPLE_DISTANCE = 8;
 
 /** Initial dot visual radius (px). */
 export const INITIAL_DOT_RADIUS = 12;
@@ -182,7 +182,7 @@ export const EXPLORE_RADIUS_MULT = 12;
 /** Strength of the return-to-dot steering force. */
 export const RETURN_FORCE = 3.0;
 /** Strength of the outward radial steering bias applied to exploring lines. */
-export const OUTWARD_BIAS = 2.0;
+export const OUTWARD_BIAS = 4.0;
 /** Grid cell size (px) for tracking area coverage around each dot. */
 export const CELL_SIZE = 6;
 /** Spatial-hash cell size (px) for active line-head lookups. */

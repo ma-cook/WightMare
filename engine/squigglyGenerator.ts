@@ -167,10 +167,8 @@ export function bakeWiggle(points: Point[], time: number, variant: number = 0): 
     const ty = next.y - prev.y;
     const len = Math.sqrt(tx * tx + ty * ty) || 1;
     const off = wiggleOffset(i, time, variant);
-    points[i] = {
-      x: points[i].x + (-ty / len) * off,
-      y: points[i].y + (tx / len) * off,
-    };
+    points[i].x = points[i].x + (-ty / len) * off;
+    points[i].y = points[i].y + (tx / len) * off;
   }
 }
 
