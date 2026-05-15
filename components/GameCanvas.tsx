@@ -80,8 +80,6 @@ const EDGE_MARGIN = 4;
 const _dotSvgCache = new Map<string, string>();
 const _ringOffsetsCache = new Map<number, Array<[number, number]>>();
 // Reusable string-part buffers — cleared per dot render pass to avoid per-frame allocations.
-const _linePathParts: string[] = [];
-const _closeCallParts: string[] = [];
 const _outerCircleParts: string[] = [];
 const _innerCircleParts: string[] = [];
 const _dragOuterParts: string[] = [];
@@ -872,8 +870,6 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
           {/* Active (unconnected) lines — batched into merged <Path> per dot */}
           {gs.dots.map((dot: DotState) => {
-            _linePathParts.length = 0;
-            _closeCallParts.length = 0;
             _outerCircleParts.length = 0;
             _innerCircleParts.length = 0;
             _dragOuterParts.length = 0;
@@ -881,15 +877,19 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             let hasDragging = false;
             let hasLines = false;
 
+            // First pass: update wiggle caches and build merged head-circle paths.
+            // Wiggle strings are cached on each line; when unchanged the same string
+            // reference is reused so React skips the DOM setAttribute call below.
             for (let i = 0; i < dot.activeLineIds.length; i++) {
               const line = gs.lineMap.get(dot.activeLineIds[i]);
               if (!line) continue;
               hasLines = true;
               const isDragging = isLineDragged(line.id);
               const pathLen = line.pathPoints.length;
-              const lodStride = pathLen > 220 ? 3 : pathLen > 120 ? 2 : 1;
-              // Longer paths animate less frequently — they are less sensitive to wiggle refresh.
-              const cadence = pathLen > 150 ? 12 : 8;
+              // Apply LOD early to keep bezier counts — and therefore both string sizes
+              // and browser rasterisation work — low even for young lines.
+              const lodStride = pathLen > 100 ? 3 : pathLen > 30 ? 2 : 1;
+              const cadence = pathLen > 80 ? 16 : 8;
               const cadenceDue = gs.frameCount - line.cachedWiggleFrame >= cadence;
               if (
                 !line.cachedWiggleSvg ||
@@ -905,15 +905,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
                 line.cachedWiggleFrame = gs.frameCount;
                 line.cachedWiggleStride = lodStride;
               }
-              const svgPath = line.cachedWiggleSvg;
-              // Close-call: head within 20px of any edge → red
               const head = headOf(line);
-              const isCloseCall = !isDragging && (head.x < 20 || head.y < 20 || head.x > width - 20 || head.y > height - 20);
-              if (isCloseCall) {
-                _closeCallParts.push(svgPath);
-              } else {
-                _linePathParts.push(svgPath);
-              }
               const hx = Math.round(head.x);
               const hy = Math.round(head.y);
               if (isDragging) {
@@ -933,8 +925,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
             if (!hasLines) return null;
             const innerColor = dot.id === 'dot-left' ? '#ffffff' : '#bbbbbb';
-            const linePaths = _linePathParts.join(' ');
-            const closeCallD = _closeCallParts.join(' ');
+            // Head circles always move so always need a fresh merged string.
             const outerD = _outerCircleParts.join(' ');
             const innerD = _innerCircleParts.join(' ');
             const dragOuterD = _dragOuterParts.join(' ');
@@ -942,8 +933,33 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
             return (
               <React.Fragment key={`${dot.id}-active`}>
-                {linePaths && <Path d={linePaths} stroke={LINE_COLOR} strokeWidth={6} fill="none" strokeLinecap="round" strokeLinejoin="round" />}
-                {closeCallD && <Path d={closeCallD} stroke="#CC0000" strokeWidth={7} fill="none" strokeLinecap="round" strokeLinejoin="round" />}
+                {/* One <Path> per active line.  React compares the `d` prop by
+                    reference: when line.cachedWiggleSvg is the same string object
+                    as the previous render (no rebuild occurred this frame) React
+                    skips the DOM setAttribute call entirely, so the browser never
+                    re-rasterises that path.  This eliminates both the large joined-
+                    string allocation and the per-frame SVG repaint for stable lines. */}
+                {dot.activeLineIds.map((lineId) => {
+                  const line = gs.lineMap.get(lineId);
+                  if (!line || !line.cachedWiggleSvg) return null;
+                  // Close-call: head within 20px of any edge → red stroke
+                  const head = headOf(line);
+                  const isCloseCall = !isLineDragged(line.id) && (
+                    head.x < 20 || head.y < 20 ||
+                    head.x > width - 20 || head.y > height - 20
+                  );
+                  return (
+                    <Path
+                      key={lineId}
+                      d={line.cachedWiggleSvg}
+                      stroke={isCloseCall ? '#CC0000' : LINE_COLOR}
+                      strokeWidth={isCloseCall ? 7 : 6}
+                      fill="none"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  );
+                })}
                 {outerD && <Path d={outerD} fill={HEAD_COLOR} />}
                 {innerD && <Path d={innerD} fill={innerColor} />}
                 {hasDragging && dragOuterD && <Path d={dragOuterD} fill={HEAD_COLOR} />}
