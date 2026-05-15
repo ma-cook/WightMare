@@ -180,9 +180,9 @@ export const GROWTH_THRESHOLD = 2500;
 /** Explore radius = this multiplier × dot.radius. */
 export const EXPLORE_RADIUS_MULT = 12;
 /** Strength of the return-to-dot steering force. */
-export const RETURN_FORCE = 3.0;
+export const RETURN_FORCE = 1.5;
 /** Strength of the outward radial steering bias applied to exploring lines. */
-export const OUTWARD_BIAS = 4.0;
+export const OUTWARD_BIAS = 2.0;
 /** Grid cell size (px) for tracking area coverage around each dot. */
 export const CELL_SIZE = 6;
 /** Spatial-hash cell size (px) for active line-head lookups. */

@@ -51,6 +51,11 @@ export function pointsToSvgPath(points: Point[]): string {
  * Avoids allocating an intermediate wiggled-points array.
  * Uses pre-sized array + direct indexing for minimal allocation.
  */
+// Pre-allocated buffer for wiggle path building.
+// Using array+join avoids the intermediate flat string copies that Hermes
+// (React Native's JS engine) eagerly allocates with `d +=` on every iteration.
+const _wiggleParts: string[] = [];
+
 /**
  * Compute wiggle offset for a given point index, time, and variant.
  * All variants stay within roughly ±2.5 px amplitude.
@@ -79,8 +84,12 @@ export function pointsToWiggledSvgPath(points: Point[], time: number, variant: n
     return `M ${Math.round(points[0].x)} ${Math.round(points[0].y)} L ${Math.round(points[1].x)} ${Math.round(points[1].y)}`;
   }
 
-  // Build path via string concatenation — avoids array + join allocation
-  let d = `M ${Math.round(points[0].x)} ${Math.round(points[0].y)}`;
+  // Build path via pre-allocated array + join.
+  // In Hermes (React Native's JS engine), `d +=` eagerly copies the entire
+  // accumulated string on every iteration, creating O(n²) bytes of garbage.
+  // Array+join builds the final string in one pass with no intermediate copies.
+  let wi = 0;
+  _wiggleParts[wi++] = `M ${Math.round(points[0].x)} ${Math.round(points[0].y)}`;
 
   // Pre-compute wiggled position for index 1
   let wcx: number, wcy: number;
@@ -111,12 +120,12 @@ export function pointsToWiggledSvgPath(points: Point[], time: number, variant: n
       wcy = points[n - 1].y;
     }
 
-    d += ` Q ${Math.round(cx)} ${Math.round(cy)} ${Math.round((cx + wcx) * 0.5)} ${Math.round((cy + wcy) * 0.5)}`;
+    _wiggleParts[wi++] = `Q ${Math.round(cx)} ${Math.round(cy)} ${Math.round((cx + wcx) * 0.5)} ${Math.round((cy + wcy) * 0.5)}`;
   }
 
-  d += ` L ${Math.round(points[n - 1].x)} ${Math.round(points[n - 1].y)}`;
-
-  return d;
+  _wiggleParts[wi++] = `L ${Math.round(points[n - 1].x)} ${Math.round(points[n - 1].y)}`;
+  _wiggleParts.length = wi;
+  return _wiggleParts.join(' ');
 }
 
 /**

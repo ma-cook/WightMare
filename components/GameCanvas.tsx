@@ -86,6 +86,7 @@ const _outerCircleParts: string[] = [];
 const _innerCircleParts: string[] = [];
 const _dragOuterParts: string[] = [];
 const _dragInnerParts: string[] = [];
+const _dotParts: string[] = [];
 // Reusable bucket pool for the head spatial grid.
 const _bucketPool: string[][] = [];
 
@@ -956,7 +957,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             // Rebuild dot path every 2 frames — bump animation doesn't need 60fps,
             // and caching lets the GPU reuse the rasterised fill for large dots.
             const cachedDotPath = _dotSvgCache.get(dot.id);
-            if (cachedDotPath && gs.frameCount % 4 !== 0) {
+            if (cachedDotPath && gs.frameCount % 8 !== 0) {
               return <Path key={dot.id} d={cachedDotPath} fill="#111111" />;
             }
             let r = dot.radius;
@@ -987,9 +988,11 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             }
 
             // Build smooth closed cubic-bezier path (Catmull-Rom, tension 1/6)
+            // _dotParts is a module-level reusable array — avoids allocating a
+            // new Array on every rebuild (every other render frame per dot).
             const n = segments;
-            const dotParts = new Array<string>(n + 2);
-            dotParts[0] = `M ${Math.round(buf[0])} ${Math.round(buf[1])}`;
+            _dotParts.length = n + 2;
+            _dotParts[0] = `M ${Math.round(buf[0])} ${Math.round(buf[1])}`;
             for (let i = 0; i < n; i++) {
               const i0 = ((i - 1 + n) % n) * 2;
               const i1 = i * 2;
@@ -999,10 +1002,10 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               const cp1y = buf[i1 + 1] + (buf[i2 + 1] - buf[i0 + 1]) / 6;
               const cp2x = buf[i2] - (buf[i3] - buf[i1]) / 6;
               const cp2y = buf[i2 + 1] - (buf[i3 + 1] - buf[i1 + 1]) / 6;
-              dotParts[i + 1] = `C ${Math.round(cp1x)} ${Math.round(cp1y)}, ${Math.round(cp2x)} ${Math.round(cp2y)}, ${Math.round(buf[i2])} ${Math.round(buf[i2 + 1])}`;
+              _dotParts[i + 1] = `C ${Math.round(cp1x)} ${Math.round(cp1y)}, ${Math.round(cp2x)} ${Math.round(cp2y)}, ${Math.round(buf[i2])} ${Math.round(buf[i2 + 1])}`;
             }
-            dotParts[n + 1] = 'Z';
-            const dotPath = dotParts.join(' ');
+            _dotParts[n + 1] = 'Z';
+            const dotPath = _dotParts.join(' ');
             _dotSvgCache.set(dot.id, dotPath);
             return (
               <Path
