@@ -11,7 +11,7 @@
  *  • Applies difficulty escalation when pairs aren't connected in time.
  *  • Triggers game-over when any head reaches the screen edge.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Platform,
   StyleSheet,
@@ -74,6 +74,248 @@ const HEAD_COLOR = '#111111';
 // ─── Edge margin: how close to the border a head must be to trigger loss ─────
 const EDGE_MARGIN = 4;
 
+/**
+ * Build a simplified SVG path string from a point array, reducing each stored
+ * path to at most maxPoints bezier control points.  Called once per connection
+ * (not a hot path) so all paths are retained but each is cheaper to rasterise.
+ */
+function simplifiedSvgPath(pts: Point[], maxPoints: number): string {
+  if (pts.length <= maxPoints) return pointsToSvgPath(pts);
+  const stride = Math.ceil(pts.length / maxPoints);
+  const s: Point[] = [pts[0]];
+  for (let i = stride; i < pts.length - 1; i += stride) s.push(pts[i]);
+  s.push(pts[pts.length - 1]);
+  return pointsToSvgPath(s);
+}
+
+// ─── Canvas 2D drawing helpers (web only) ─────────────────────────────────────
+// Replaces the animated <Svg> on web: imperative canvas calls avoid React
+// reconciliation and SVG string building on every animation frame.
+
+/** Reusable scratch buffer for LOD-strided path sampling — no per-frame alloc. */
+const _canvasPathScratch: Point[] = [];
+
+/** Per-variant wiggle offset — mirrors wiggleOffset() in squigglyGenerator.ts. */
+function _canvasWiggleOffset(i: number, time: number, variant: number): number {
+  switch (variant) {
+    case 1:
+      return Math.sin(i * 4.5 + time * 3.0) * 1.5 + Math.sin(i * 1.5 + time * 5.5) * 1.0;
+    case 2:
+      return Math.cos(i * 2.0 + time * 3.5) * 2.0 + Math.sin(i * 5.0 - time * 2.0) * 0.5;
+    default:
+      return Math.sin(i * 3.0 + time * 4.0) * 2.5;
+  }
+}
+
+/**
+ * Draw a wiggled path directly onto a Canvas 2D context.
+ * Mirrors pointsToWiggledSvgPathLod but emits quadraticCurveTo calls instead
+ * of building a string — eliminates all string allocation per path per frame.
+ */
+function _drawWiggledPath(
+  ctx: CanvasRenderingContext2D,
+  points: Point[],
+  time: number,
+  variant: number,
+  stride: number,
+): void {
+  const n0 = points.length;
+  if (n0 === 0) return;
+  let pts: Point[];
+  if (stride > 1 && n0 > 4) {
+    _canvasPathScratch.length = 0;
+    _canvasPathScratch.push(points[0]);
+    for (let i = stride; i < n0 - 1; i += stride) _canvasPathScratch.push(points[i]);
+    _canvasPathScratch.push(points[n0 - 1]);
+    pts = _canvasPathScratch;
+  } else {
+    pts = points;
+  }
+  const n = pts.length;
+  if (n < 2) return;
+  ctx.moveTo(pts[0].x, pts[0].y);
+  if (n === 2) { ctx.lineTo(pts[1].x, pts[1].y); return; }
+  // Pre-compute first wiggled control point
+  let wcx: number, wcy: number;
+  {
+    const p = pts[1];
+    const tx = pts[2].x - pts[0].x;
+    const ty = pts[2].y - pts[0].y;
+    const len = Math.sqrt(tx * tx + ty * ty) || 1;
+    const off = _canvasWiggleOffset(1, time, variant);
+    wcx = p.x + (-ty / len) * off;
+    wcy = p.y + (tx / len) * off;
+  }
+  for (let i = 1; i < n - 1; i++) {
+    const cx = wcx;
+    const cy = wcy;
+    if (i + 1 < n - 1) {
+      const p = pts[i + 1];
+      const tx = pts[i + 2].x - pts[i].x;
+      const ty = pts[i + 2].y - pts[i].y;
+      const len = Math.sqrt(tx * tx + ty * ty) || 1;
+      const off = _canvasWiggleOffset(i + 1, time, variant);
+      wcx = p.x + (-ty / len) * off;
+      wcy = p.y + (tx / len) * off;
+    } else {
+      wcx = pts[n - 1].x;
+      wcy = pts[n - 1].y;
+    }
+    ctx.quadraticCurveTo(cx, cy, (cx + wcx) * 0.5, (cy + wcy) * 0.5);
+  }
+  ctx.lineTo(pts[n - 1].x, pts[n - 1].y);
+}
+
+/**
+ * Full-frame draw for the web canvas layer.
+ * Renders active lines, head circles, dot blobs, flash indicators, and combo
+ * dots — everything the animated <Svg> rendered, via direct canvas calls with
+ * no React reconciliation or SVG string building.
+ */
+function drawCanvasFrame(
+  ctx: CanvasRenderingContext2D,
+  gs: GameState,
+  width: number,
+  height: number,
+  renderTime: number,
+  renderNow: number,
+): void {
+  ctx.clearRect(0, 0, width, height);
+  const isDragged = (lineId: string): boolean => {
+    for (const v of gs.draggingMap.values()) if (v === lineId) return true;
+    return false;
+  };
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  // ── Active lines (wiggly strokes) ─────────────────────────────────────────
+  for (let di = 0; di < gs.dots.length; di++) {
+    const dot = gs.dots[di];
+    for (let li = 0; li < dot.activeLineIds.length; li++) {
+      const line = gs.lineMap.get(dot.activeLineIds[li]);
+      if (!line) continue;
+      const pathLen = line.pathPoints.length;
+      const lodStride = pathLen > 100 ? 3 : pathLen > 30 ? 2 : 1;
+      const head = line.pathPoints[pathLen - 1];
+      const isCloseCall = !isDragged(line.id) && (
+        head.x < 20 || head.y < 20 || head.x > width - 20 || head.y > height - 20
+      );
+      ctx.beginPath();
+      _drawWiggledPath(ctx, line.pathPoints, renderTime, line.wiggleVariant, lodStride);
+      ctx.strokeStyle = isCloseCall ? '#CC0000' : LINE_COLOR;
+      ctx.lineWidth = isCloseCall ? 7 : 6;
+      ctx.stroke();
+    }
+  }
+
+  // ── Head circles ──────────────────────────────────────────────────────────
+  for (let di = 0; di < gs.dots.length; di++) {
+    const dot = gs.dots[di];
+    const innerColor = dot.id === 'dot-left' ? '#ffffff' : '#bbbbbb';
+    for (let li = 0; li < dot.activeLineIds.length; li++) {
+      const line = gs.lineMap.get(dot.activeLineIds[li]);
+      if (!line) continue;
+      const head = line.pathPoints[line.pathPoints.length - 1];
+      if (isDragged(line.id)) {
+        const dragStart = gs.dragStartTime.get(line.id) ?? renderNow;
+        const heldSec = Math.min((renderNow - dragStart) / 1000, 3);
+        const sizeMult = Math.pow(2, heldSec);
+        ctx.beginPath(); ctx.arc(head.x, head.y, 9 * sizeMult, 0, Math.PI * 2);
+        ctx.fillStyle = HEAD_COLOR; ctx.fill();
+        ctx.beginPath(); ctx.arc(head.x, head.y, 4 * sizeMult, 0, Math.PI * 2);
+        ctx.fillStyle = innerColor; ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.arc(head.x, head.y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = HEAD_COLOR; ctx.fill();
+        ctx.beginPath(); ctx.arc(head.x, head.y, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = innerColor; ctx.fill();
+      }
+    }
+  }
+
+  // ── Dot blobs (bumpy Catmull-Rom circles) ─────────────────────────────────
+  for (let di = 0; di < gs.dots.length; di++) {
+    const dot = gs.dots[di];
+    let r = dot.radius;
+    const pulseElapsed = renderNow - dot.lastSpawnPulseTime;
+    if (pulseElapsed < 300 && dot.lastSpawnPulseTime > 0) {
+      r *= 1 + 0.08 * (1 - pulseElapsed / 300);
+    }
+    const BUMPS = 5;
+    const BUMP_AMP = Math.min(r * 0.04, 3);
+    const BUMP_SPEED = 1.2;
+    const segments = Math.min(36, Math.max(24, Math.round(r * 2)));
+    const step = (Math.PI * 2) / segments;
+    const needed = segments * 2;
+    if (dot._dotBuf.length < needed) dot._dotBuf = new Float64Array(needed);
+    const buf = dot._dotBuf;
+    for (let i = 0; i < segments; i++) {
+      const angle = i * step;
+      const bump =
+        Math.sin(angle * BUMPS + renderTime * BUMP_SPEED) * BUMP_AMP * 0.6 +
+        Math.sin(angle * (BUMPS + 3) - renderTime * BUMP_SPEED * 1.3) * BUMP_AMP * 0.4;
+      const br = r + bump;
+      buf[i * 2] = dot.x + Math.cos(angle) * br;
+      buf[i * 2 + 1] = dot.y + Math.sin(angle) * br;
+    }
+    const n = segments;
+    ctx.beginPath();
+    ctx.moveTo(buf[0], buf[1]);
+    for (let i = 0; i < n; i++) {
+      const i0 = ((i - 1 + n) % n) * 2;
+      const i1 = i * 2;
+      const i2 = ((i + 1) % n) * 2;
+      const i3 = ((i + 2) % n) * 2;
+      const cp1x = buf[i1] + (buf[i2] - buf[i0]) / 6;
+      const cp1y = buf[i1 + 1] + (buf[i2 + 1] - buf[i0 + 1]) / 6;
+      const cp2x = buf[i2] - (buf[i3] - buf[i1]) / 6;
+      const cp2y = buf[i2 + 1] - (buf[i3 + 1] - buf[i1 + 1]) / 6;
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, buf[i2], buf[i2 + 1]);
+    }
+    ctx.closePath();
+    ctx.fillStyle = '#111111';
+    ctx.fill();
+
+    // ── Flash indicator ────────────────────────────────────────────────────
+    if (dot.flash) {
+      const elapsed = renderNow - dot.flash.startTime;
+      const duration = dot.flash.type === 'reward' ? 500 : 250;
+      if (elapsed >= duration) {
+        dot.flash = null;
+      } else {
+        const opacity = 1 - elapsed / duration;
+        ctx.save();
+        ctx.globalAlpha = opacity;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(dot.x, dot.y, 5, 0, Math.PI * 2);
+        if (dot.flash.type === 'reward') {
+          ctx.fillStyle = '#ffffff'; ctx.fill();
+          ctx.strokeStyle = '#555555'; ctx.stroke();
+        } else {
+          ctx.fillStyle = '#555555'; ctx.fill();
+          ctx.strokeStyle = '#ffffff'; ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
+    // ── Combo dots ────────────────────────────────────────────────────────
+    if (dot.combo > 0) {
+      const count = Math.min(dot.combo, 10);
+      const dotR = Math.max(2, Math.min(4, r * 0.12));
+      const ringR = r * 0.55;
+      ctx.fillStyle = '#8B0000';
+      for (let i = 0; i < count; i++) {
+        const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
+        ctx.beginPath();
+        ctx.arc(dot.x + Math.cos(angle) * ringR, dot.y + Math.sin(angle) * ringR, dotR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+}
+
 // Per-dot SVG path cache — dot shape is rebuilt every 2 frames only (30fps is
 // enough for a background blob; halves path-build work and lets the GPU reuse
 // the rasterised fill more often, which is the main cost at large radii).
@@ -102,6 +344,51 @@ const isDesktopWeb =
   typeof window !== 'undefined' &&
   window.matchMedia?.('(pointer: fine)').matches === true;
 
+// ─── Connected-paths layer ───────────────────────────────────────────────────
+// Isolated in its own <Svg> and wrapped in React.memo so it NEVER repaints
+// during the 30fps animation loop.  It only re-renders when `version`
+// (= gs.totalConnected) increments, i.e. exactly when a new connection is made.
+
+interface ConnectedLayerProps {
+  dots: DotState[];
+  width: number;
+  height: number;
+  /** Bumped on every new connection — drives the memo comparison. */
+  version: number;
+}
+
+const ConnectedPathsLayer = React.memo(
+  function ConnectedPathsLayer({ dots, width, height }: ConnectedLayerProps) {
+    return (
+      <Svg
+        width={width}
+        height={height}
+        style={{ position: 'absolute', top: 0, left: 0 }}
+        pointerEvents="none"
+      >
+        {dots.map((dot) => {
+          const d = dot.connectedPaths.join(' ');
+          dot.cachedConnectedSvg = d;
+          dot.connectedSvgDirty = false;
+          return d ? (
+            <Path
+              key={dot.id}
+              d={d}
+              stroke="#444444"
+              strokeWidth={6}
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ) : null;
+        })}
+      </Svg>
+    );
+  },
+  // Re-render only when a new connection was made.
+  (prev, next) => prev.version === next.version,
+);
+
 export default function GameCanvas({ width, height, playerName, personalBest, onReturnToMenu }: Props) {
   // ── React state: only used to trigger re-renders ──────────────────────────
   const [renderTick, setRenderTick] = useState(0);
@@ -111,6 +398,22 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
   const stateRef = useRef<GameState>(createInitialState(width, height));
   const headGridRef = useRef<Map<number, string[]>>(new Map());
   const pointPoolRef = useRef<Point[]>([]);
+
+  // Web canvas ref — draws the animated layer imperatively (no SVG diffing).
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // After every React render-tick (30 fps), draw the animated frame to canvas.
+  // useLayoutEffect runs synchronously before the browser paint so the canvas
+  // is always current when the frame is composited.
+  useLayoutEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const s = stateRef.current;
+    drawCanvasFrame(ctx, s, width, height, s.loopTimeSec, Date.now());
+  });
 
   // ─────────────────────────────────────────────────────────────────────────
   // Helpers
@@ -167,6 +470,11 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
   };
 
   const markCoveredCell = (dot: DotState, x: number, y: number): void => {
+    // Cells inside the dot's fill area can never be in a growth ring — skip them
+    // to keep the coveredCells Set lean as the dot grows large.
+    const ddx = x - dot.x;
+    const ddy = y - dot.y;
+    if (ddx * ddx + ddy * ddy < dot.targetRadius * dot.targetRadius) return;
     const key = packCell((x * INV_CELL_SIZE) | 0, (y * INV_CELL_SIZE) | 0);
     const before = dot.coveredCells.size;
     dot.coveredCells.add(key);
@@ -516,16 +824,23 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
           line.wanderPhase = advancePhase(line.wanderPhase, line.wanderOmega, dt);
           line.direction += Math.sin(line.wanderPhase) * DIRECTION_WOBBLE * 0.85 * dt;
 
-          // Escaped lines get stronger wandering so they don't beeline to the edge
+          // Escaped lines are pushed outward (away from dot) and get mild wandering
           if (escaped) {
+            // Strong outward radial bias — steers head away from the parent dot toward the edge
+            const escapeOutAngle = Math.atan2(-dotDy, -dotDx);
+            let escapeOutDiff = escapeOutAngle - line.direction;
+            escapeOutDiff = ((escapeOutDiff + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
+            line.direction += escapeOutDiff * OUTWARD_BIAS * 3.5 * dt;
+
+            // Mild sinusoidal wandering — reduced from before so lines don't loop back
             line.escapeTurnPhase = advancePhase(
               line.escapeTurnPhase,
               line.escapeTurnOmegaA,
               dt,
             );
             const ratio = line.escapeTurnOmegaB / Math.max(line.escapeTurnOmegaA, 0.001);
-            line.direction += Math.sin(line.escapeTurnPhase) * 2.0 * dt
-                            + Math.cos(line.escapeTurnPhase * ratio) * 1.5 * dt;
+            line.direction += Math.sin(line.escapeTurnPhase) * 0.7 * dt
+                            + Math.cos(line.escapeTurnPhase * ratio) * 0.5 * dt;
           }
 
           const speed = LINE_SPEED * dt;
@@ -733,9 +1048,11 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
                 markCoveredCell(parentDot, pt.x, pt.y);
               }
 
-              // Persist connected lines as a single static gray stroke.
-              if (draggedLine.cachedSvgPath) parentDot.connectedPaths.push(draggedLine.cachedSvgPath);
-              if (snapTarget.cachedSvgPath) parentDot.connectedPaths.push(snapTarget.cachedSvgPath);
+              // Persist connected lines as simplified static strokes.
+              // Each path is reduced to ≤20 points (was up to 250) to keep per-path
+              // bezier complexity low; ALL paths are retained so the screen fills.
+              parentDot.connectedPaths.push(simplifiedSvgPath(draggedLine.pathPoints, 20));
+              parentDot.connectedPaths.push(simplifiedSvgPath(snapTarget.pathPoints, 20));
               parentDot.connectedSvgDirty = true;
 
               // Remove from storage arrays and recycle objects for reuse.
@@ -839,6 +1156,13 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
   return (
     <View style={styles.container}>
+      {/* Connected-paths layer — isolated SVG, repaints only on new connection */}
+      <ConnectedPathsLayer
+        dots={gs.dots}
+        width={width}
+        height={height}
+        version={gs.totalConnected}
+      />
       {/* Touch / mouse capture layer */}
       <View
         ref={touchLayerRef}
@@ -848,26 +1172,18 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
         onTouchEnd={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'end')}
         onTouchCancel={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'end')}
       >
+        {/* On web the animated layer is a <canvas> element — imperative draw
+            calls are far faster than React SVG diffing for 30fps game content.
+            On native it remains a react-native-svg <Svg> element. */}
+        {Platform.OS === 'web' ? (
+          React.createElement('canvas', {
+            ref: canvasRef,
+            width,
+            height,
+            style: { position: 'absolute', top: 0, left: 0 },
+          } as any)
+        ) : (
         <Svg width={width} height={height} style={styles.svg}>
-          {/* Connected (static) lines — persistent gray stroke */}
-          {gs.dots.map((dot: DotState) => {
-            if (dot.connectedSvgDirty) {
-              dot.cachedConnectedSvg = dot.connectedPaths.join(' ');
-              dot.connectedSvgDirty = false;
-            }
-            return dot.cachedConnectedSvg ? (
-              <Path
-                key={`${dot.id}-connected`}
-                d={dot.cachedConnectedSvg}
-                stroke="#444444"
-                strokeWidth={6}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ) : null;
-          })}
-
           {/* Active (unconnected) lines — batched into merged <Path> per dot */}
           {gs.dots.map((dot: DotState) => {
             _outerCircleParts.length = 0;
@@ -889,7 +1205,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
               // Apply LOD early to keep bezier counts — and therefore both string sizes
               // and browser rasterisation work — low even for young lines.
               const lodStride = pathLen > 100 ? 3 : pathLen > 30 ? 2 : 1;
-              const cadence = pathLen > 80 ? 16 : 8;
+              const cadence = pathLen > 150 ? 32 : pathLen > 80 ? 16 : 8;
               const cadenceDue = gs.frameCount - line.cachedWiggleFrame >= cadence;
               if (
                 !line.cachedWiggleSvg ||
@@ -973,7 +1289,9 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             // Rebuild dot path every 2 frames — bump animation doesn't need 60fps,
             // and caching lets the GPU reuse the rasterised fill for large dots.
             const cachedDotPath = _dotSvgCache.get(dot.id);
-            if (cachedDotPath && gs.frameCount % 8 !== 0) {
+            // Large dots change slowly — rebuild less often to reduce JS work.
+            const dotFrameInterval = dot.radius > 60 ? 16 : 8;
+            if (cachedDotPath && gs.frameCount % dotFrameInterval !== 0) {
               return <Path key={dot.id} d={cachedDotPath} fill="#111111" />;
             }
             let r = dot.radius;
@@ -1080,6 +1398,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
 
 
         </Svg>
+        )}
       </View>
 
       {/* HUD — survival timer */}
