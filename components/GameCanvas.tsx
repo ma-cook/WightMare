@@ -830,7 +830,7 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
             const escapeOutAngle = Math.atan2(-dotDy, -dotDx);
             let escapeOutDiff = escapeOutAngle - line.direction;
             escapeOutDiff = ((escapeOutDiff + Math.PI) % (2 * Math.PI) + (2 * Math.PI)) % (2 * Math.PI) - Math.PI;
-            line.direction += escapeOutDiff * OUTWARD_BIAS * 3.5 * dt;
+            line.direction += escapeOutDiff * OUTWARD_BIAS * 2.5 * dt;
 
             // Mild sinusoidal wandering — reduced from before so lines don't loop back
             line.escapeTurnPhase = advancePhase(
