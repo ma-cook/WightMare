@@ -8,8 +8,7 @@ interface Props {
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
-  const ms = Math.floor((seconds % 1) * 10);
-  return `${m}:${s.toString().padStart(2, '0')}.${ms}`;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 function HUD({ survivalTime }: Props) {
@@ -21,7 +20,7 @@ function HUD({ survivalTime }: Props) {
 }
 
 export default React.memo(HUD, (prev, next) => {
-  // Only re-render when the displayed string actually changes (tenths of a second)
+  // Only re-render when the displayed string actually changes (whole seconds)
   return formatTime(prev.survivalTime) === formatTime(next.survivalTime);
 });
 
