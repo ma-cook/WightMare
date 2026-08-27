@@ -11,7 +11,7 @@
  *  • Applies difficulty escalation when pairs aren't connected in time.
  *  • Triggers game-over when any head reaches the screen edge.
  */
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import {
   Platform,
   StyleSheet,
@@ -1079,49 +1079,59 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
   );
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Web mouse support — desktop browsers don't fire touch events for mouse
+  // Unified Pointer Events — one input path for mouse, touch and pen on web.
+  // Pointer Events replace the previous dual mouse/touch handlers.
   // ─────────────────────────────────────────────────────────────────────────
 
   const touchLayerRef = useRef<View>(null);
-  const mouseDownRef = useRef(false);
 
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-    const el = (touchLayerRef.current as any) as HTMLElement | null;
-    if (!el) return;
+  /**
+   * Adapt a React synthetic PointerEvent into the touch-like shape
+   * processTouches expects: { identifier, locationX, locationY }.
+   * pointerId uniquely identifies each pointer (mouse id, or one per finger).
+   */
+  const toPointerTouches = useCallback((e: any): NativeTouchEvent[] => {
+    // Prefer locationX/locationY (native pointer events); fall back to
+    // clientX/clientY minus the layer's bounding rect (web).
+    let locationX = e.locationX;
+    let locationY = e.locationY;
+    if (locationX === undefined || locationY === undefined) {
+      const el = (touchLayerRef.current as any) as HTMLElement | null;
+      const rect = el ? el.getBoundingClientRect() : { left: 0, top: 0 };
+      locationX = e.clientX - rect.left;
+      locationY = e.clientY - rect.top;
+    }
+    return [{ identifier: e.pointerId, locationX, locationY } as any];
+  }, []);
 
-    const toTouch = (e: MouseEvent): NativeTouchEvent[] => {
-      const rect = el.getBoundingClientRect();
-      return [{ identifier: -1, locationX: e.clientX - rect.left, locationY: e.clientY - rect.top } as any];
-    };
+  const onPointerDown = useCallback((e: any) => {
+    // Capture the pointer so we keep receiving move/up even when it leaves
+    // the element — replaces the old window-level mousemove/mouseup listeners.
+    const target = (e.currentTarget ?? e.target) as HTMLElement | undefined;
+    try {
+      target?.setPointerCapture?.(e.pointerId);
+    } catch (_) {
+      /* capture can fail if pointer already released */
+    }
+    e.preventDefault?.();
+    processTouches(toPointerTouches(e), 'start');
+  }, [processTouches, toPointerTouches]);
 
-    const onMouseDown = (e: MouseEvent) => {
-      e.preventDefault();
-      mouseDownRef.current = true;
-      processTouches(toTouch(e), 'start');
-    };
+  const onPointerMove = useCallback((e: any) => {
+    processTouches(toPointerTouches(e), 'move');
+  }, [processTouches, toPointerTouches]);
 
-    const onMouseMove = (e: MouseEvent) => {
-      if (!mouseDownRef.current) return;
-      processTouches(toTouch(e), 'move');
-    };
+  const onPointerUp = useCallback((e: any) => {
+    const target = (e.currentTarget ?? e.target) as HTMLElement | undefined;
+    try {
+      target?.releasePointerCapture?.(e.pointerId);
+    } catch (_) { /* ignore */ }
+    processTouches(toPointerTouches(e), 'end');
+  }, [processTouches, toPointerTouches]);
 
-    const onMouseUp = (e: MouseEvent) => {
-      if (!mouseDownRef.current) return;
-      mouseDownRef.current = false;
-      processTouches(toTouch(e), 'end');
-    };
-
-    el.addEventListener('mousedown', onMouseDown);
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-
-    return () => {
-      el.removeEventListener('mousedown', onMouseDown);
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-  }, [processTouches]);
+  const onPointerCancel = useCallback((e: any) => {
+    processTouches(toPointerTouches(e), 'end');
+  }, [processTouches, toPointerTouches]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Restart
@@ -1167,10 +1177,10 @@ export default function GameCanvas({ width, height, playerName, personalBest, on
       <View
         ref={touchLayerRef}
         style={[styles.touchLayer, { width, height }]}
-        onTouchStart={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'start')}
-        onTouchMove={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'move')}
-        onTouchEnd={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'end')}
-        onTouchCancel={(e) => processTouches(e.nativeEvent.changedTouches || [e.nativeEvent], 'end')}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
       >
         {/* On web the animated layer is a <canvas> element — imperative draw
             calls are far faster than React SVG diffing for 30fps game content.
@@ -1433,7 +1443,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     left: 0,
-  },
+    // Required on mobile web: prevents the browser from hijacking pointer
+    // movement for scroll/zoom so Pointer Events actually reach the app.
+    // (web-only properties — cast for the RN style types)
+    touchAction: 'none',
+    userSelect: 'none',
+  } as any,
   svg: {
     position: 'absolute',
     top: 0,
